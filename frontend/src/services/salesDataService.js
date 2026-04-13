@@ -5,6 +5,7 @@ import {
   deleteDoc,
   doc,
   getDocs,
+  limit,
   onSnapshot,
   query,
   serverTimestamp,
@@ -12,21 +13,132 @@ import {
   writeBatch
 } from 'firebase/firestore';
 import { getDownloadURL, ref, uploadBytesResumable } from 'firebase/storage';
+import * as XLSX from 'xlsx';
 import { db, storage } from './firebase';
 
-const MAX_FILE_SIZE = 5 * 1024 * 1024;
+const MAX_FILE_SIZE = 20 * 1024 * 1024;
+
+const HEADER_ALIASES = {
+  productname: 'productName',
+  product: 'productName',
+  item: 'productName',
+  name: 'productName',
+  sales: 'sales',
+  revenue: 'sales',
+  quantitysold: 'sales',
+  qtysold: 'sales',
+  stock: 'stock',
+  inventory: 'stock',
+  quantity: 'stock',
+  date: 'date',
+  saledate: 'date',
+  solddate: 'date',
+  timestamp: 'date'
+};
+
+export function formatFirestoreError(error, fallbackMessage = 'Operation failed.') {
+  const code = String(error?.code || '').toLowerCase();
+  const message = String(error?.message || '');
+  const isPermissionDenied = code.includes('permission-denied') || /insufficient permissions|permission-denied/i.test(message);
+
+  if (isPermissionDenied) {
+    return 'Firestore permission denied. Open Firestore Rules, apply the rules from FIRESTORE_RULES.md, and publish them.';
+  }
+
+  return message || fallbackMessage;
+}
+
+function debugInfo(event, payload = {}) {
+  console.info(`[Firestore] ${event}`, payload);
+}
+
+function debugError(event, error, payload = {}) {
+  console.error(`[Firestore] ${event}`, {
+    ...payload,
+    code: error?.code || '',
+    message: error?.message || String(error || '')
+  });
+}
+
+async function logActivity({ userId, action, status, message, meta = {} }) {
+  if (!userId) {
+    return;
+  }
+
+  try {
+    await addDoc(collection(db, 'activityLogs'), {
+      userId,
+      action,
+      status,
+      message,
+      meta,
+      createdAt: serverTimestamp()
+    });
+  } catch {
+    // Logging should never block the main business flow.
+  }
+}
 
 function normalizeDate(value) {
   if (value?.toDate) return value.toDate();
   return new Date(value);
 }
 
+function normalizeNumeric(value) {
+  if (typeof value === 'number') {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const cleaned = value.replace(/,/g, '').trim();
+    return cleaned ? Number(cleaned) : Number.NaN;
+  }
+  return Number(value);
+}
+
+function normalizeIncomingDate(value) {
+  if (value instanceof Date) {
+    return value;
+  }
+  if (value?.toDate) {
+    return value.toDate();
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    // Excel serial dates count from 1899-12-30 in most spreadsheets.
+    const excelEpochMs = Date.UTC(1899, 11, 30);
+    return new Date(excelEpochMs + value * 24 * 60 * 60 * 1000);
+  }
+  return new Date(value);
+}
+
+function normalizeRecordShape(record = {}) {
+  const normalized = {};
+
+  Object.entries(record).forEach(([rawKey, rawValue]) => {
+    const key = String(rawKey || '').trim();
+    if (!key) {
+      return;
+    }
+
+    const compactKey = key.toLowerCase().replace(/[\s_-]/g, '');
+    const mappedKey = HEADER_ALIASES[compactKey] || key;
+    normalized[mappedKey] = rawValue;
+  });
+
+  return {
+    productName: normalized.productName,
+    sales: normalized.sales,
+    stock: normalized.stock,
+    date: normalizeIncomingDate(normalized.date)
+  };
+}
+
 function ensureValidRecord(record, row = 0) {
+  const normalizedRecord = normalizeRecordShape(record);
   const normalized = {
-    productName: String(record.productName || '').trim(),
-    sales: Number(record.sales),
-    stock: Number(record.stock),
-    date: new Date(record.date)
+    productName: String(normalizedRecord.productName || '').trim(),
+    sales: normalizeNumeric(normalizedRecord.sales),
+    stock: normalizeNumeric(normalizedRecord.stock),
+    date: normalizeIncomingDate(normalizedRecord.date)
   };
 
   if (!normalized.productName) {
@@ -45,28 +157,86 @@ function ensureValidRecord(record, row = 0) {
   return normalized;
 }
 
+function parseCsvLine(line) {
+  const values = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i += 1) {
+    const char = line[i];
+
+    if (char === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        current += '"';
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+
+    if (char === ',' && !inQuotes) {
+      values.push(current.trim());
+      current = '';
+      continue;
+    }
+
+    current += char;
+  }
+
+  values.push(current.trim());
+  return values;
+}
+
 function parseCsv(text) {
-  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const lines = text
+    .replace(/^\uFEFF/, '')
+    .split(/\r?\n/)
+    .filter((line) => line.trim().length > 0);
+
   if (lines.length < 2) {
     throw new Error('CSV file is empty or missing data rows.');
   }
 
-  const headers = lines[0].split(',').map((h) => h.trim());
+  const headers = parseCsvLine(lines[0]).map((h) => h.trim());
+  if (!headers.length) {
+    throw new Error('CSV header row is missing.');
+  }
+
   return lines.slice(1).map((line, idx) => {
-    const values = line.split(',').map((v) => v.trim());
+    const values = parseCsvLine(line);
     const row = {};
     headers.forEach((header, colIdx) => {
-      row[header] = values[colIdx];
+      row[header] = values[colIdx] ?? '';
     });
-    return ensureValidRecord(row, idx + 1);
+    return ensureValidRecord(row, idx + 2);
   });
+}
+
+async function parseXlsx(file) {
+  const buffer = await file.arrayBuffer();
+  const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
+  const firstSheetName = workbook.SheetNames[0];
+
+  if (!firstSheetName) {
+    throw new Error('Spreadsheet has no sheets to read.');
+  }
+
+  const sheet = workbook.Sheets[firstSheetName];
+  const rows = XLSX.utils.sheet_to_json(sheet, { defval: '', raw: true });
+
+  if (!rows.length) {
+    throw new Error('Spreadsheet is empty or missing data rows.');
+  }
+
+  return rows.map((record, index) => ensureValidRecord(record, index + 2));
 }
 
 async function parseFile(file) {
   const ext = file.name.toLowerCase();
-  const text = await file.text();
 
   if (ext.endsWith('.json')) {
+    const text = await file.text();
     let payload;
     try {
       payload = JSON.parse(text);
@@ -83,10 +253,15 @@ async function parseFile(file) {
   }
 
   if (ext.endsWith('.csv')) {
+    const text = await file.text();
     return parseCsv(text);
   }
 
-  throw new Error('Only CSV and JSON files are supported.');
+  if (ext.endsWith('.xlsx') || ext.endsWith('.xls')) {
+    return parseXlsx(file);
+  }
+
+  throw new Error('Only CSV, JSON, and XLSX files are supported.');
 }
 
 function buildDailyTrends(salesRows) {
@@ -286,48 +461,221 @@ export async function refreshDerivedCollections(userId) {
   };
 }
 
+async function collectionHasUserRows(collectionName, userId) {
+  const snapshot = await getDocs(query(collection(db, collectionName), where('userId', '==', userId), limit(1)));
+  return !snapshot.empty;
+}
+
+async function seedCollectionIfMissing(collectionName, userId, buildData) {
+  const exists = await collectionHasUserRows(collectionName, userId);
+  if (exists) {
+    debugInfo('seed_skipped_existing', { collectionName, userId });
+    return false;
+  }
+
+  await addDoc(collection(db, collectionName), {
+    ...buildData(),
+    userId,
+    createdAt: serverTimestamp(),
+    source: 'bootstrap'
+  });
+
+  debugInfo('seed_created', { collectionName, userId });
+  return true;
+}
+
+export async function bootstrapUserRealtimeData({ userId, userName = 'User', userEmail = '' }) {
+  if (!userId) {
+    throw new Error('Missing userId for bootstrap process.');
+  }
+
+  const now = new Date();
+  const tomorrow = new Date(now);
+  tomorrow.setDate(now.getDate() + 1);
+
+  debugInfo('bootstrap_start', { userId });
+
+  const created = {
+    salesData: false,
+    alerts: false,
+    forecasts: false,
+    recommendations: false
+  };
+
+  try {
+    created.salesData = await seedCollectionIfMissing('salesData', userId, () => ({
+      productName: 'Test Product',
+      sales: 100,
+      stock: 20,
+      date: Timestamp.fromDate(now)
+    }));
+
+    created.alerts = await seedCollectionIfMissing('alerts', userId, () => ({
+      message: 'Low stock detected',
+      type: 'warning',
+      severity: 'medium',
+      timestamp: serverTimestamp(),
+      sourceDate: now.toISOString(),
+      productName: 'Test Product'
+    }));
+
+    created.forecasts = await seedCollectionIfMissing('forecasts', userId, () => ({
+      date: tomorrow.toISOString().slice(0, 10),
+      predictedSales: 110,
+      method: 'bootstrap_seed',
+      window: 1
+    }));
+
+    created.recommendations = await seedCollectionIfMissing('recommendations', userId, () => ({
+      action: 'Review stock levels for Test Product',
+      productName: 'Test Product',
+      reason: 'Bootstrap recommendation for new user pipeline verification.',
+      ownerName: userName,
+      ownerEmail: userEmail
+    }));
+
+    await logActivity({
+      userId,
+      action: 'bootstrap_complete',
+      status: Object.values(created).some(Boolean) ? 'success' : 'info',
+      message: 'Bootstrap pipeline completed.',
+      meta: created
+    });
+
+    debugInfo('bootstrap_complete', { userId, created });
+    return created;
+  } catch (error) {
+    const message = formatFirestoreError(error, 'Bootstrap pipeline failed.');
+    debugError('bootstrap_failed', error, { userId });
+
+    await logActivity({
+      userId,
+      action: 'bootstrap_failed',
+      status: 'error',
+      message,
+      meta: created
+    });
+
+    throw new Error(message);
+  }
+}
+
 export function validateUploadFile(file) {
   if (!file) {
     return 'Please select a file.';
   }
 
   const ext = file.name.toLowerCase();
-  const valid = ext.endsWith('.csv') || ext.endsWith('.json');
+  const valid = ext.endsWith('.csv') || ext.endsWith('.json') || ext.endsWith('.xlsx') || ext.endsWith('.xls');
   if (!valid) {
-    return 'Invalid file format. Only CSV and JSON are allowed.';
+    return 'Invalid file format. Only CSV, JSON, and XLSX files are allowed.';
   }
 
   if (file.size > MAX_FILE_SIZE) {
-    return 'File is too large. Maximum allowed size is 5MB.';
+    return 'File is too large. Maximum allowed size is 20MB.';
   }
 
   return '';
 }
 
 export async function uploadFileAndIngest({ userId, file, onProgress }) {
+  if (!userId) {
+    throw new Error('Please sign in before uploading data.');
+  }
+
   const validationError = validateUploadFile(file);
   if (validationError) {
     throw new Error(validationError);
   }
 
-  const safeName = file.name.replace(/\s+/g, '_');
-  const fileRef = ref(storage, `uploads/${userId}/${Date.now()}_${safeName}`);
-  const uploadTask = uploadBytesResumable(fileRef, file);
-
-  await new Promise((resolve, reject) => {
-    uploadTask.on(
-      'state_changed',
-      (snapshot) => {
-        if (!snapshot.totalBytes || !onProgress) return;
-        onProgress(Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100));
-      },
-      (error) => reject(error),
-      () => resolve()
-    );
+  await logActivity({
+    userId,
+    action: 'upload_start',
+    status: 'info',
+    message: 'Upload started.',
+    meta: {
+      fileName: file.name,
+      fileSize: file.size,
+      fileType: file.type || 'unknown'
+    }
   });
 
-  const downloadURL = await getDownloadURL(fileRef);
-  const records = await parseFile(file);
+  let records = [];
+  try {
+    records = await parseFile(file);
+  } catch (error) {
+    const parseMessage = error?.message || 'Unable to parse file.';
+    await logActivity({
+      userId,
+      action: 'upload_parse_failed',
+      status: 'error',
+      message: parseMessage,
+      meta: {
+        fileName: file.name
+      }
+    });
+    throw error;
+  }
+
+  await logActivity({
+    userId,
+    action: 'upload_parse_success',
+    status: 'success',
+    message: 'File parsed successfully.',
+    meta: {
+      fileName: file.name,
+      recordsCount: records.length
+    }
+  });
+
+  const warnings = [];
+  let filePath = '';
+  let downloadURL = '';
+
+  const safeName = file.name.replace(/\s+/g, '_');
+  const fileRef = ref(storage, `uploads/${userId}/${Date.now()}_${safeName}`);
+
+  try {
+    const uploadTask = uploadBytesResumable(fileRef, file);
+
+    await new Promise((resolve, reject) => {
+      uploadTask.on(
+        'state_changed',
+        (snapshot) => {
+          if (!snapshot.totalBytes || !onProgress) return;
+          onProgress(Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100));
+        },
+        (error) => reject(error),
+        () => resolve()
+      );
+    });
+
+    filePath = fileRef.fullPath;
+    downloadURL = await getDownloadURL(fileRef);
+
+    await logActivity({
+      userId,
+      action: 'upload_storage_success',
+      status: 'success',
+      message: 'File archived in Storage.',
+      meta: {
+        fileName: file.name,
+        filePath
+      }
+    });
+  } catch {
+    warnings.push('Data rows were imported, but file archival failed. Check Firebase Storage rules.');
+
+    await logActivity({
+      userId,
+      action: 'upload_storage_failed',
+      status: 'warning',
+      message: 'Storage archival failed but ingestion will continue.',
+      meta: {
+        fileName: file.name
+      }
+    });
+  }
 
   const batch = writeBatch(db);
   const salesCollection = collection(db, 'salesData');
@@ -344,50 +692,268 @@ export async function uploadFileAndIngest({ userId, file, onProgress }) {
     });
   });
 
-  await batch.commit();
+  try {
+    await batch.commit();
+    debugInfo('sales_write_success', { userId, recordsCount: records.length });
+  } catch (error) {
+    const saveMessage = formatFirestoreError(error, 'Failed to write sales records.');
+    debugError('sales_write_failed', error, { userId, recordsCount: records.length });
+    await logActivity({
+      userId,
+      action: 'upload_sales_write_failed',
+      status: 'error',
+      message: saveMessage,
+      meta: {
+        fileName: file.name,
+        recordsCount: records.length
+      }
+    });
+    throw new Error(saveMessage);
+  }
 
-  await addDoc(collection(db, 'uploads'), {
+  await logActivity({
     userId,
-    fileName: file.name,
-    fileType: file.type || 'unknown',
-    fileSize: file.size,
-    filePath: fileRef.fullPath,
-    downloadURL,
-    recordsCount: records.length,
+    action: 'upload_sales_write_success',
     status: 'success',
-    createdAt: serverTimestamp()
+    message: 'Sales records saved to Firestore.',
+    meta: {
+      fileName: file.name,
+      recordsCount: records.length
+    }
   });
 
-  await refreshDerivedCollections(userId);
+  try {
+    await addDoc(collection(db, 'uploads'), {
+      userId,
+      fileName: file.name,
+      fileType: file.type || 'unknown',
+      fileSize: file.size,
+      filePath,
+      downloadURL,
+      recordsCount: records.length,
+      status: warnings.length ? 'partial' : 'success',
+      warning: warnings.join(' '),
+      createdAt: serverTimestamp()
+    });
+    debugInfo('upload_history_write_success', { userId, fileName: file.name, recordsCount: records.length });
 
-  return { recordsCount: records.length, downloadURL };
+    await logActivity({
+      userId,
+      action: 'upload_history_saved',
+      status: 'success',
+      message: 'Upload history record saved.',
+      meta: {
+        fileName: file.name,
+        recordsCount: records.length
+      }
+    });
+  } catch {
+    debugError('upload_history_write_failed', new Error('Upload history write failed'), { userId, fileName: file.name });
+    warnings.push('Data rows were imported, but upload history could not be saved. Check uploads rules.');
+
+    await logActivity({
+      userId,
+      action: 'upload_history_failed',
+      status: 'warning',
+      message: 'Upload history record failed.',
+      meta: {
+        fileName: file.name
+      }
+    });
+  }
+
+  try {
+    await refreshDerivedCollections(userId);
+    debugInfo('derived_refresh_success', { userId });
+
+    await logActivity({
+      userId,
+      action: 'upload_derived_refreshed',
+      status: 'success',
+      message: 'Derived collections refreshed.',
+      meta: {
+        fileName: file.name
+      }
+    });
+  } catch {
+    debugError('derived_refresh_failed', new Error('Derived refresh failed'), { userId });
+    warnings.push('Data rows were imported, but derived insights could not refresh yet.');
+
+    await logActivity({
+      userId,
+      action: 'upload_derived_failed',
+      status: 'warning',
+      message: 'Derived collections refresh failed.',
+      meta: {
+        fileName: file.name
+      }
+    });
+  }
+
+  if (onProgress) {
+    onProgress(100);
+  }
+
+  const result = {
+    recordsCount: records.length,
+    downloadURL,
+    warning: warnings.join(' ')
+  };
+
+  debugInfo('upload_complete', {
+    userId,
+    recordsCount: records.length,
+    warnings: warnings.length
+  });
+
+  await logActivity({
+    userId,
+    action: 'upload_complete',
+    status: warnings.length ? 'partial' : 'success',
+    message: warnings.length ? 'Upload completed with warnings.' : 'Upload completed successfully.',
+    meta: {
+      fileName: file.name,
+      recordsCount: records.length,
+      warningCount: warnings.length
+    }
+  });
+
+  return result;
 }
 
 export async function saveManualRecord({ userId, record }) {
+  if (!userId) {
+    throw new Error('Please sign in before submitting data.');
+  }
+
+  await logActivity({
+    userId,
+    action: 'manual_entry_start',
+    status: 'info',
+    message: 'Manual entry started.',
+    meta: {
+      productName: record?.productName || ''
+    }
+  });
+
   const normalized = ensureValidRecord(record, 1);
+  const warnings = [];
 
-  await addDoc(collection(db, 'salesData'), {
-    productName: normalized.productName,
-    sales: normalized.sales,
-    stock: normalized.stock,
-    date: Timestamp.fromDate(normalized.date),
-    userId,
-    createdAt: serverTimestamp()
-  });
+  try {
+    await addDoc(collection(db, 'salesData'), {
+      productName: normalized.productName,
+      sales: normalized.sales,
+      stock: normalized.stock,
+      date: Timestamp.fromDate(normalized.date),
+      userId,
+      createdAt: serverTimestamp()
+    });
+    debugInfo('manual_sales_write_success', { userId, productName: normalized.productName });
+  } catch (error) {
+    const saveMessage = formatFirestoreError(error, 'Manual record save failed.');
+    debugError('manual_sales_write_failed', error, { userId, productName: normalized.productName });
+    await logActivity({
+      userId,
+      action: 'manual_entry_sales_write_failed',
+      status: 'error',
+      message: saveMessage,
+      meta: {
+        productName: normalized.productName
+      }
+    });
+    throw new Error(saveMessage);
+  }
 
-  await addDoc(collection(db, 'uploads'), {
+  await logActivity({
     userId,
-    fileName: `manual_${normalized.productName}`,
-    fileType: 'manual',
-    fileSize: 0,
-    filePath: 'manual',
-    downloadURL: '',
-    recordsCount: 1,
+    action: 'manual_entry_sales_write_success',
     status: 'success',
-    createdAt: serverTimestamp()
+    message: 'Manual record saved to Firestore.',
+    meta: {
+      productName: normalized.productName,
+      sales: normalized.sales,
+      stock: normalized.stock
+    }
   });
 
-  await refreshDerivedCollections(userId);
+  try {
+    await addDoc(collection(db, 'uploads'), {
+      userId,
+      fileName: `manual_${normalized.productName}`,
+      fileType: 'manual',
+      fileSize: 0,
+      filePath: 'manual',
+      downloadURL: '',
+      recordsCount: 1,
+      status: 'success',
+      createdAt: serverTimestamp()
+    });
+
+    await logActivity({
+      userId,
+      action: 'manual_entry_history_saved',
+      status: 'success',
+      message: 'Manual entry history saved.',
+      meta: {
+        productName: normalized.productName
+      }
+    });
+  } catch {
+    warnings.push('Manual record was saved, but upload history could not be saved.');
+
+    await logActivity({
+      userId,
+      action: 'manual_entry_history_failed',
+      status: 'warning',
+      message: 'Manual entry history save failed.',
+      meta: {
+        productName: normalized.productName
+      }
+    });
+  }
+
+  try {
+    await refreshDerivedCollections(userId);
+
+    await logActivity({
+      userId,
+      action: 'manual_entry_derived_refreshed',
+      status: 'success',
+      message: 'Derived collections refreshed after manual entry.',
+      meta: {
+        productName: normalized.productName
+      }
+    });
+  } catch {
+    warnings.push('Manual record was saved, but derived insights could not refresh yet.');
+
+    await logActivity({
+      userId,
+      action: 'manual_entry_derived_failed',
+      status: 'warning',
+      message: 'Derived refresh failed after manual entry.',
+      meta: {
+        productName: normalized.productName
+      }
+    });
+  }
+
+  const result = {
+    warning: warnings.join(' ')
+  };
+
+  await logActivity({
+    userId,
+    action: 'manual_entry_complete',
+    status: warnings.length ? 'partial' : 'success',
+    message: warnings.length ? 'Manual entry completed with warnings.' : 'Manual entry completed successfully.',
+    meta: {
+      productName: normalized.productName,
+      warningCount: warnings.length
+    }
+  });
+
+  return result;
 }
 
 function subscribeToUserCollection(collectionName, userId, mapper, onData, onError) {
@@ -396,9 +962,15 @@ function subscribeToUserCollection(collectionName, userId, mapper, onData, onErr
     q,
     (snapshot) => {
       const rows = snapshot.docs.map((docSnap) => mapper(docSnap));
+      debugInfo('data_fetched', { collectionName, userId, count: rows.length });
       onData(rows);
     },
-    onError
+    (snapshotError) => {
+      debugError('listener_error', snapshotError, { collectionName, userId });
+      if (onError) {
+        onError(snapshotError);
+      }
+    }
   );
 }
 

@@ -12,7 +12,7 @@ import {
 import Spinner from '../components/Spinner';
 import ErrorBanner from '../components/ErrorBanner';
 import { useAuth } from '../context/AuthContext';
-import { subscribeToForecasts, subscribeToUserSalesData } from '../services/salesDataService';
+import { formatFirestoreError, subscribeToForecasts, subscribeToUserSalesData } from '../services/salesDataService';
 
 export default function ForecastPage() {
   const { user, authLoading } = useAuth();
@@ -55,7 +55,7 @@ export default function ForecastPage() {
         done();
       },
       (snapshotError) => {
-        setError(snapshotError.message || 'Failed to load sales data.');
+        setError(formatFirestoreError(snapshotError, 'Failed to load sales data.'));
         salesReady = true;
         done();
       }

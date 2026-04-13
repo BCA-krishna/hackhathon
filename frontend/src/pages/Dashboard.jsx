@@ -4,6 +4,7 @@ import Spinner from '../components/Spinner';
 import ErrorBanner from '../components/ErrorBanner';
 import { useAuth } from '../context/AuthContext';
 import {
+  formatFirestoreError,
   subscribeToAlerts,
   subscribeToForecasts,
   subscribeToRecommendations,
@@ -70,7 +71,7 @@ export default function DashboardPage() {
         doneInit();
       },
       (snapshotError) => {
-        setError(snapshotError.message || 'Failed to load sales data');
+        setError(formatFirestoreError(snapshotError, 'Failed to load sales data'));
         salesInitialized = true;
         doneInit();
       }

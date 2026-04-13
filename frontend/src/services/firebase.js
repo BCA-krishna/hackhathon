@@ -14,11 +14,29 @@ const firebaseConfig = {
   measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || 'G-D7JX1TXH6K'
 };
 
+const requiredConfigKeys = ['apiKey', 'authDomain', 'projectId', 'appId'];
+const missingConfigKeys = requiredConfigKeys.filter((key) => !firebaseConfig[key]);
+
+if (missingConfigKeys.length) {
+  console.error('[Firebase] Missing required config keys', { missingConfigKeys });
+} else {
+  console.info('[Firebase] Config verified', {
+    projectId: firebaseConfig.projectId,
+    authDomain: firebaseConfig.authDomain
+  });
+}
+
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const googleProvider = new GoogleAuthProvider();
 const db = getFirestore(app);
 const storage = getStorage(app);
+
+console.info('[Firebase] Initialized app services', {
+  hasAuth: Boolean(auth),
+  hasDb: Boolean(db),
+  hasStorage: Boolean(storage)
+});
 
 let analytics = null;
 if (typeof window !== 'undefined') {

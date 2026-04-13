@@ -9,6 +9,7 @@ import {
 } from 'firebase/auth';
 import { doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
 import { auth, db, googleProvider } from '../services/firebase';
+import { bootstrapUserRealtimeData } from '../services/salesDataService';
 
 const AuthContext = createContext(null);
 
@@ -20,6 +21,11 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
       if (firebaseUser) {
+        console.info('[Auth] Login success', {
+          uid: firebaseUser.uid,
+          email: firebaseUser.email || ''
+        });
+
         setUser({
           id: firebaseUser.uid,
           uid: firebaseUser.uid,
@@ -27,7 +33,18 @@ export function AuthProvider({ children }) {
           email: firebaseUser.email || '',
           photoURL: firebaseUser.photoURL || ''
         });
+
+        syncUserProfile(firebaseUser, firebaseUser.displayName || 'User')
+          .catch((error) => {
+            console.error('[Auth] Firestore user sync failed', {
+              code: error?.code || '',
+              message: error?.message || String(error || '')
+            });
+          })
+          .finally(() => setAuthLoading(false));
+        return;
       } else {
+        console.info('[Auth] Logged out');
         setUser(null);
       }
       setAuthLoading(false);
@@ -43,13 +60,28 @@ export function AuthProvider({ children }) {
       email: firebaseUser.email || ''
     };
 
-    const userRef = doc(db, 'users', firebaseUser.uid);
-    const userDoc = await getDoc(userRef);
+    try {
+      const userRef = doc(db, 'users', firebaseUser.uid);
+      const userDoc = await getDoc(userRef);
 
-    if (!userDoc.exists()) {
-      await setDoc(userRef, {
-        ...userPayload,
-        createdAt: serverTimestamp()
+      if (!userDoc.exists()) {
+        await setDoc(userRef, {
+          ...userPayload,
+          createdAt: serverTimestamp()
+        });
+        console.info('[Auth] Firestore write success: user created', {
+          uid: firebaseUser.uid
+        });
+      } else {
+        console.info('[Auth] Firestore user exists, skipping create', {
+          uid: firebaseUser.uid
+        });
+      }
+    } catch (error) {
+      console.error('[Auth] Firestore user write error', {
+        code: error?.code || '',
+        message: error?.message || String(error || ''),
+        uid: firebaseUser.uid
       });
     }
 
@@ -62,11 +94,56 @@ export function AuthProvider({ children }) {
     return userPayload;
   };
 
+  useEffect(() => {
+    if (!user?.uid) {
+      return () => {};
+    }
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const created = await bootstrapUserRealtimeData({
+          userId: user.uid,
+          userName: auth.currentUser?.displayName || user.name || 'User',
+          userEmail: auth.currentUser?.email || user.email || ''
+        });
+
+        if (!cancelled) {
+          console.info('[Auth] Bootstrap pipeline complete', {
+            uid: user.uid,
+            created
+          });
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.error('[Auth] Bootstrap pipeline error', {
+            code: error?.code || '',
+            message: error?.message || String(error || ''),
+            uid: user.uid
+          });
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.uid]);
+
   const signInWithGoogle = async () => {
     setActionLoading(true);
     try {
       const result = await signInWithPopup(auth, googleProvider);
-      return syncUserProfile(result.user, 'User');
+      const payload = await syncUserProfile(result.user, 'User');
+      console.info('[Auth] Google login success', { uid: result.user.uid });
+      return payload;
+    } catch (error) {
+      console.error('[Auth] Google login failed', {
+        code: error?.code || '',
+        message: error?.message || String(error || '')
+      });
+      throw error;
     } finally {
       setActionLoading(false);
     }
@@ -79,7 +156,15 @@ export function AuthProvider({ children }) {
       if (name?.trim()) {
         await updateProfile(result.user, { displayName: name.trim() });
       }
-      return syncUserProfile(result.user, name?.trim() || 'User');
+      const payload = await syncUserProfile(result.user, name?.trim() || 'User');
+      console.info('[Auth] Email signup success', { uid: result.user.uid });
+      return payload;
+    } catch (error) {
+      console.error('[Auth] Email signup failed', {
+        code: error?.code || '',
+        message: error?.message || String(error || '')
+      });
+      throw error;
     } finally {
       setActionLoading(false);
     }
@@ -89,7 +174,15 @@ export function AuthProvider({ children }) {
     setActionLoading(true);
     try {
       const result = await signInWithEmailAndPassword(auth, email, password);
-      return syncUserProfile(result.user, 'User');
+      const payload = await syncUserProfile(result.user, 'User');
+      console.info('[Auth] Email login success', { uid: result.user.uid });
+      return payload;
+    } catch (error) {
+      console.error('[Auth] Email login failed', {
+        code: error?.code || '',
+        message: error?.message || String(error || '')
+      });
+      throw error;
     } finally {
       setActionLoading(false);
     }

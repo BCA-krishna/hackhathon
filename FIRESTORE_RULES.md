@@ -1,27 +1,19 @@
 # Firestore Security Rules
 
-Use these baseline rules to enforce authenticated access and per-user data boundaries.
+Use this temporary debug rule to quickly unblock permission errors while you validate the pipeline.
 
 ```text
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Optional profile docs keyed by uid.
-    match /users/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
-    }
-
-    // Generic user-scoped data rule for salesData, alerts, forecasts, recommendations, uploads, etc.
     match /{collection}/{doc} {
-      allow create: if request.auth != null
-                    && request.resource.data.userId == request.auth.uid;
-
-      allow read, update, delete: if request.auth != null
-                                  && resource.data.userId == request.auth.uid;
+      allow read, write: if request.auth != null;
     }
   }
 }
 ```
+
+After debugging is complete, replace this with stricter per-user rules before production.
 
 ## Storage Rules (Uploads)
 

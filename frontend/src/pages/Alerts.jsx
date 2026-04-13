@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import Spinner from '../components/Spinner';
 import ErrorBanner from '../components/ErrorBanner';
 import { useAuth } from '../context/AuthContext';
-import { subscribeToAlerts, subscribeToRecommendations, subscribeToUserSalesData } from '../services/salesDataService';
+import { formatFirestoreError, subscribeToAlerts, subscribeToRecommendations, subscribeToUserSalesData } from '../services/salesDataService';
 
 function severityClasses(severity) {
   if (severity === 'high') return 'border-rose-400/40 bg-rose-500/10 text-rose-200';
@@ -64,7 +64,7 @@ export default function AlertsPage() {
         done();
       },
       (snapshotError) => {
-        setError(snapshotError.message || 'Failed to load sales data.');
+        setError(formatFirestoreError(snapshotError, 'Failed to load sales data.'));
         salesReady = true;
         done();
       }
@@ -165,7 +165,7 @@ export default function AlertsPage() {
           <p className="mb-3 text-sm font-medium text-slate-300">Alerts List</p>
 
           <div className="space-y-3">
-            {alerts.length ? (
+            {computedAlerts.length ? (
               computedAlerts.map((alert, idx) => (
                 <div key={alert.id || idx} className={`rounded-xl border p-3 ${severityClasses(alert.severity)}`}>
                   <div className="flex items-start justify-between gap-3">
@@ -197,7 +197,7 @@ export default function AlertsPage() {
           <p className="mb-3 text-sm font-medium text-slate-300">Recommendations Panel</p>
 
           <div className="space-y-3">
-            {recommendations.length ? (
+            {computedRecommendations.length ? (
               computedRecommendations.map((rec, idx) => (
                 <div key={rec.id || `${rec.productName}-${idx}`} className={`rounded-xl border p-3 ${recommendationTone(rec.action || '')}`}>
                   <div className="flex items-center justify-between gap-2">

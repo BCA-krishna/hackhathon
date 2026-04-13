@@ -14,6 +14,8 @@ coverage/
 .env.*
 backend/.env
 frontend/.env
+*firebase-adminsdk*.json
+backend/*firebase-adminsdk*.json
 
 # Logs
 *.log

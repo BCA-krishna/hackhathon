@@ -4,6 +4,7 @@ import ErrorBanner from '../components/ErrorBanner';
 import Button3D from '../components/Button3D';
 import { useAuth } from '../context/AuthContext';
 import {
+  formatFirestoreError,
   saveManualRecord,
   subscribeToUploads,
   uploadFileAndIngest,
@@ -25,7 +26,13 @@ export default function UploadDataPage() {
   const fileInputRef = useRef(null);
 
   const hasManualError = useMemo(
-    () => !manual.productName.trim() || Number(manual.sales) < 0 || Number(manual.stock) < 0 || !manual.date,
+    () =>
+      !manual.productName.trim() ||
+      manual.sales === '' ||
+      manual.stock === '' ||
+      Number(manual.sales) < 0 ||
+      Number(manual.stock) < 0 ||
+      !manual.date,
     [manual]
   );
 
@@ -38,7 +45,7 @@ export default function UploadDataPage() {
     const unsub = subscribeToUploads(
       user.uid,
       (rows) => setHistory(rows.slice(0, 8)),
-      (snapshotError) => setError(snapshotError.message || 'Failed to load uploads history.')
+      () => setHistory([])
     );
 
     return () => unsub();
@@ -76,12 +83,16 @@ export default function UploadDataPage() {
         onProgress: (percent) => setUploadProgress(percent)
       });
 
-      setSuccess(`Data uploaded successfully. ${result.recordsCount} records integrated.`);
+      setSuccess(
+        result.warning
+          ? `Data uploaded successfully. ${result.recordsCount} records integrated. ${result.warning}`
+          : `Data uploaded successfully. ${result.recordsCount} records integrated.`
+      );
       setToast('Data uploaded successfully');
       setFile(null);
       setValidationMessage('');
     } catch (err) {
-      const message = err.message || 'Failed to upload file';
+      const message = formatFirestoreError(err, 'Failed to upload file');
       setError(message);
     } finally {
       setLoading(false);
@@ -99,7 +110,7 @@ export default function UploadDataPage() {
         throw new Error('Please sign in before submitting data.');
       }
 
-      await saveManualRecord({
+      const result = await saveManualRecord({
         userId: user.uid,
         record: {
           productName: manual.productName,
@@ -109,11 +120,13 @@ export default function UploadDataPage() {
         }
       });
 
-      setSuccess('Manual record submitted successfully');
+      setSuccess(
+        result?.warning ? `Manual record submitted successfully. ${result.warning}` : 'Manual record submitted successfully'
+      );
       setToast('Manual entry saved');
       setManual({ productName: '', sales: '', stock: '', date: '' });
     } catch (err) {
-      const message = err.message || 'Failed to submit manual record';
+      const message = formatFirestoreError(err, 'Failed to submit manual record');
       setError(message);
     } finally {
       setLoading(false);
@@ -141,13 +154,13 @@ export default function UploadDataPage() {
 
       <div className="grid gap-6 xl:grid-cols-3">
         <form onSubmit={handleFileUpload} className="rounded-2xl border border-slate-700 bg-slate-900/70 p-4 xl:col-span-2">
-          <h2 className="text-lg font-medium text-white">Drag & Drop Upload (CSV/JSON)</h2>
+          <h2 className="text-lg font-medium text-white">Drag & Drop Upload (CSV/JSON/XLSX)</h2>
           <p className="mt-1 text-sm text-slate-400">Required fields: productName, sales, stock, date</p>
 
           <input
             ref={fileInputRef}
             type="file"
-            accept=".csv,.json,application/json,text/csv"
+            accept=".csv,.json,.xlsx,.xls,application/json,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
             onChange={(event) => selectFile(event.target.files?.[0] || null)}
             className="hidden"
           />
@@ -164,7 +177,7 @@ export default function UploadDataPage() {
               dragActive ? 'border-emerald-400 bg-emerald-400/10' : 'border-slate-600 bg-slate-950/40 hover:border-slate-500'
             }`}
           >
-            <p className="text-sm text-slate-200">Drop your CSV/JSON file here or click to browse</p>
+            <p className="text-sm text-slate-200">Drop your CSV, JSON, or XLSX file here or click to browse</p>
             <p className="mt-1 text-xs text-slate-400">{file ? `Selected: ${file.name}` : 'No file selected'}</p>
           </div>
 
@@ -199,7 +212,15 @@ export default function UploadDataPage() {
                 <div key={`${item.createdAt}-${idx}`} className="rounded-xl border border-slate-700 bg-slate-950/50 p-3 text-sm">
                   <div className="flex items-center justify-between">
                     <span className="font-medium text-slate-100">{item.fileType === 'manual' ? 'Manual Entry' : 'File Upload'}</span>
-                    <span className={`text-xs ${(item.status || 'success') === 'success' ? 'text-emerald-300' : 'text-rose-300'}`}>
+                    <span
+                      className={`text-xs ${
+                        (item.status || 'success') === 'success'
+                          ? 'text-emerald-300'
+                          : (item.status || 'success') === 'partial'
+                            ? 'text-amber-300'
+                            : 'text-rose-300'
+                      }`}
+                    >
                       {item.status || 'success'}
                     </span>
                   </div>

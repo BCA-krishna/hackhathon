@@ -1,4 +1,5 @@
 const admin = require('firebase-admin');
+const fs = require('fs');
 const env = require('./env');
 
 let firestore = null;
@@ -17,7 +18,14 @@ function connectDB() {
   }
 
   if (!admin.apps.length) {
-    if (env.firebaseProjectId && env.firebaseClientEmail && env.firebasePrivateKey) {
+    if (env.firebaseServiceAccountPath) {
+      const raw = fs.readFileSync(env.firebaseServiceAccountPath, 'utf-8');
+      const serviceAccount = JSON.parse(raw);
+      admin.initializeApp({
+        credential: admin.credential.cert(serviceAccount),
+        projectId: serviceAccount.project_id || env.firebaseProjectId || undefined
+      });
+    } else if (env.firebaseProjectId && env.firebaseClientEmail && env.firebasePrivateKey) {
       admin.initializeApp({
         credential: admin.credential.cert({
           projectId: env.firebaseProjectId,
