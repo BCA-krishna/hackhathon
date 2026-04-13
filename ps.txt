@@ -1,0 +1,45 @@
+3. Real-Time Decision Support System for
+Small Businesses (Web Application)
+Problem Statement
+Design and develop a web-based Real-Time Decision Support System that assists small and
+medium-sized businesses in making informed operational and strategic decisions using data
+analytics. Many small businesses generate data daily through sales, customer interactions,
+inventory usage, and financial transactions, but they lack the tools and expertise to analyze this
+data effectively. As a result, decision-making often relies on intuition rather than data-driven
+insights, leading to inefficiencies and missed opportunities.
+The proposed system should allow businesses to input and integrate data from various sources
+such as sales records, inventory databases, customer feedback, and transaction logs. Inputs include
+structured and semi-structured data such as daily sales figures, product demand, stock levels, and
+customer preferences. The system should process this data using analytical models to generate
+insights such as sales trends, demand forecasting, and performance metrics.
+The platform should present results through interactive dashboards, charts, and reports that help
+business owners make decisions related to inventory management, pricing, marketing strategies,
+and resource allocation. Outputs include predictive insights, alerts for low stock or declining sales,
+and recommendations for improvement.
+The system must be scalable, user-friendly, and capable of real-time updates. It should also ensure
+data security and privacy. The final output is an intelligent decision-making tool that empowers
+small businesses to compete effectively in the market by leveraging data-driven insights.
+Key Objectives
+ Enable data-driven decision-making
+ Improve business efficiency
+ Provide real-time insights
+ Reduce operational risks
+ Enhance profitability
+Characteristics
+ Real-time data processing
+ Interactive dashboards
+ Scalable system
+ Secure data handling
+ User-friendly interface
+Innovative Ideas
+ AI-based sales forecasting
+ Automated business recommendations
+ Visual analytics dashboards
+ Integration with POS systems
+ Smart alerts for anomalies
+Outputs
+ Business insights
+ Forecast reports
+ Alerts
+ Performance analytics
+ Recommendations

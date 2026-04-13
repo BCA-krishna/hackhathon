@@ -1,0 +1,196 @@
+import { useEffect, useMemo, useState } from 'react';
+import {
+  CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis
+} from 'recharts';
+import { decisionApi } from '../services/api';
+import Spinner from '../components/Spinner';
+import ErrorBanner from '../components/ErrorBanner';
+
+export default function ForecastPage() {
+  const [forecast, setForecast] = useState(null);
+  const [insights, setInsights] = useState(null);
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [selectedProduct, setSelectedProduct] = useState('All Products');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  const load = async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const [forecastRes, insightsRes] = await Promise.all([decisionApi.getForecast(), decisionApi.getInsights()]);
+      setForecast(forecastRes.data.data);
+      setInsights(insightsRes.data.data);
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to fetch forecast');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  const productOptions = useMemo(
+    () => ['All Products', ...(insights?.topProducts || []).map((item) => item.productName)],
+    [insights]
+  );
+
+  const combinedSeries = useMemo(() => {
+    const historical = (insights?.dailyTrends || []).map((item) => ({
+      date: item.date,
+      historicalSales: Number(item.sales),
+      predictedSales: null
+    }));
+
+    const totalTopProductSales = (insights?.topProducts || []).reduce((sum, item) => sum + Number(item.sales || 0), 0);
+    const selectedShare =
+      selectedProduct === 'All Products'
+        ? 1
+        : Number((insights?.topProducts || []).find((item) => item.productName === selectedProduct)?.sales || 0) /
+          (totalTopProductSales || 1);
+
+    const predictions = (forecast?.predictions || []).map((item) => ({
+      date: item.date,
+      historicalSales: null,
+      predictedSales: Math.round(Number(item.predictedSales) * selectedShare * 100) / 100
+    }));
+
+    return [...historical, ...predictions].filter((row) => {
+      const time = new Date(row.date).getTime();
+      const fromOk = dateFrom ? time >= new Date(dateFrom).getTime() : true;
+      const toOk = dateTo ? time <= new Date(dateTo).getTime() : true;
+      return fromOk && toOk;
+    });
+  }, [dateFrom, dateTo, forecast?.predictions, insights?.dailyTrends, insights?.topProducts, selectedProduct]);
+
+  const metrics = useMemo(() => {
+    const historical = combinedSeries.filter((item) => item.historicalSales != null);
+    const predicted = combinedSeries.filter((item) => item.predictedSales != null);
+    const histAvg = historical.length
+      ? historical.reduce((sum, item) => sum + item.historicalSales, 0) / historical.length
+      : 0;
+    const predAvg = predicted.length
+      ? predicted.reduce((sum, item) => sum + item.predictedSales, 0) / predicted.length
+      : 0;
+    const expectedGrowth = histAvg > 0 ? ((predAvg - histAvg) / histAvg) * 100 : 0;
+
+    return {
+      expectedGrowth: Math.round(expectedGrowth * 10) / 10,
+      demandTrend: expectedGrowth >= 5 ? 'Rising demand' : expectedGrowth <= -5 ? 'Declining demand' : 'Stable demand'
+    };
+  }, [combinedSeries]);
+
+  if (loading) return <Spinner label="Generating forecast" />;
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight text-white">Sales Forecast</h1>
+          <p className="mt-1 text-sm text-slate-400">Predict future trends using AI insights</p>
+        </div>
+        <button type="button" onClick={load} className="rounded-lg bg-slate-800 px-4 py-2 text-sm hover:bg-slate-700">
+          Refresh
+        </button>
+      </div>
+
+      <ErrorBanner message={error} />
+
+      <div className="grid gap-3 rounded-2xl border border-slate-700 bg-slate-900/70 p-4 md:grid-cols-3">
+        <div>
+          <label className="mb-1 block text-xs text-slate-400">Date range (from)</label>
+          <input
+            type="date"
+            value={dateFrom}
+            onChange={(event) => setDateFrom(event.target.value)}
+            className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm"
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-slate-400">Date range (to)</label>
+          <input
+            type="date"
+            value={dateTo}
+            onChange={(event) => setDateTo(event.target.value)}
+            className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm"
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-slate-400">Product selection</label>
+          <select
+            value={selectedProduct}
+            onChange={(event) => setSelectedProduct(event.target.value)}
+            className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm"
+          >
+            {productOptions.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div className="h-[440px] rounded-2xl border border-slate-700 bg-slate-900/70 p-4">
+        <p className="mb-3 text-sm font-medium text-slate-300">Past vs Predicted Sales</p>
+        <ResponsiveContainer width="100%" height="90%">
+          <LineChart data={combinedSeries}>
+            <CartesianGrid strokeDasharray="4 4" stroke="#334155" />
+            <XAxis dataKey="date" stroke="#94a3b8" />
+            <YAxis stroke="#94a3b8" />
+            <Tooltip />
+            <Legend />
+            <Line
+              type="monotone"
+              dataKey="historicalSales"
+              name="Past sales"
+              stroke="#38bdf8"
+              strokeWidth={2}
+              dot={false}
+              isAnimationActive
+            />
+            <Line
+              type="monotone"
+              dataKey="predictedSales"
+              name="Predicted future sales"
+              stroke="#22c55e"
+              strokeWidth={3}
+              strokeDasharray="8 4"
+              dot={false}
+              isAnimationActive
+            />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <div className="rounded-2xl border border-slate-700 bg-slate-900/70 p-4">
+          <p className="text-xs uppercase tracking-wide text-slate-400">Expected growth</p>
+          <p className={`mt-2 text-3xl font-semibold ${metrics.expectedGrowth >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
+            {metrics.expectedGrowth}%
+          </p>
+        </div>
+
+        <div className="rounded-2xl border border-slate-700 bg-slate-900/70 p-4">
+          <p className="text-xs uppercase tracking-wide text-slate-400">Demand trend</p>
+          <p className="mt-2 text-xl font-semibold text-slate-100">{metrics.demandTrend}</p>
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-slate-700 bg-slate-900/70 p-4">
+        <p className="text-sm text-slate-300">Method: {forecast?.method || 'moving_average'}</p>
+        <p className="text-sm text-slate-400">Window: {forecast?.window || 0} days</p>
+      </div>
+    </div>
+  );
+}
