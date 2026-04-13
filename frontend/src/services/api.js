@@ -1,29 +1,21 @@
-import axios from 'axios';
-import { auth } from './firebase';
-
-const api = axios.create({
-  baseURL: 'http://localhost:5000/api'
-});
-
-api.interceptors.request.use(async (config) => {
-  const token = await auth.currentUser?.getIdToken();
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
-});
+// Backend API layer intentionally disabled. The app now uses Firebase SDK directly.
+function disabledApiCall() {
+  return Promise.reject(new Error('Backend API disabled. Use Firebase services directly.'));
+}
 
 export const decisionApi = {
-  uploadData: (payload) => api.post('/upload-data', payload),
-  uploadFile: (formData, onUploadProgress) =>
-    api.post('/upload-data', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-      onUploadProgress
-    }),
-  getInsights: () => api.get('/insights'),
-  getForecast: () => api.get('/forecast'),
-  getAlerts: () => api.get('/alerts'),
-  getRecommendations: () => api.get('/recommendations')
+  uploadData: disabledApiCall,
+  uploadFile: disabledApiCall,
+  getInsights: disabledApiCall,
+  getForecast: disabledApiCall,
+  getAlerts: disabledApiCall,
+  getRecommendations: disabledApiCall
 };
 
-export default api;
+export default {
+  get: disabledApiCall,
+  post: disabledApiCall,
+  put: disabledApiCall,
+  patch: disabledApiCall,
+  delete: disabledApiCall
+};

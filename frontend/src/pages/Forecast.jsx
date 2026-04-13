@@ -9,57 +9,142 @@ import {
   XAxis,
   YAxis
 } from 'recharts';
-import { decisionApi } from '../services/api';
 import Spinner from '../components/Spinner';
 import ErrorBanner from '../components/ErrorBanner';
+import { useAuth } from '../context/AuthContext';
+import { subscribeToForecasts, subscribeToUserSalesData } from '../services/salesDataService';
 
 export default function ForecastPage() {
-  const [forecast, setForecast] = useState(null);
-  const [insights, setInsights] = useState(null);
+  const { user, authLoading } = useAuth();
+
+  const [salesRows, setSalesRows] = useState([]);
+  const [forecastRows, setForecastRows] = useState([]);
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [selectedProduct, setSelectedProduct] = useState('All Products');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  const load = async () => {
+  useEffect(() => {
+    if (authLoading) return () => {};
+
+    if (!user?.uid) {
+      setSalesRows([]);
+      setForecastRows([]);
+      setLoading(false);
+      return () => {};
+    }
+
     setLoading(true);
     setError('');
-    try {
-      const [forecastRes, insightsRes] = await Promise.all([decisionApi.getForecast(), decisionApi.getInsights()]);
-      setForecast(forecastRes.data.data);
-      setInsights(insightsRes.data.data);
-    } catch (err) {
-      setError(err.response?.data?.message || 'Failed to fetch forecast');
-    } finally {
-      setLoading(false);
-    }
-  };
 
-  useEffect(() => {
-    load();
-  }, []);
+    let salesReady = false;
+    let forecastsReady = false;
+
+    const done = () => {
+      if (salesReady && forecastsReady) {
+        setLoading(false);
+      }
+    };
+
+    const unsubSales = subscribeToUserSalesData(
+      user.uid,
+      (rows) => {
+        setSalesRows(rows);
+        salesReady = true;
+        done();
+      },
+      (snapshotError) => {
+        setError(snapshotError.message || 'Failed to load sales data.');
+        salesReady = true;
+        done();
+      }
+    );
+
+    const unsubForecasts = subscribeToForecasts(
+      user.uid,
+      (rows) => {
+        setForecastRows(rows);
+        forecastsReady = true;
+        done();
+      },
+      (snapshotError) => {
+        setError(snapshotError.message || 'Failed to load forecast data.');
+        forecastsReady = true;
+        done();
+      }
+    );
+
+    return () => {
+      unsubSales();
+      unsubForecasts();
+    };
+  }, [authLoading, user?.uid]);
+
+  const dailyTrends = useMemo(() => {
+    const grouped = salesRows.reduce((acc, row) => {
+      const key = new Date(row.date).toISOString().slice(0, 10);
+      acc[key] = (acc[key] || 0) + Number(row.sales || 0);
+      return acc;
+    }, {});
+
+    return Object.entries(grouped)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, sales]) => ({ date, sales }));
+  }, [salesRows]);
+
+  const topProducts = useMemo(() => {
+    const grouped = salesRows.reduce((acc, row) => {
+      const productName = row.productName || 'Unknown';
+      acc[productName] = (acc[productName] || 0) + Number(row.sales || 0);
+      return acc;
+    }, {});
+
+    return Object.entries(grouped)
+      .map(([productName, sales]) => ({ productName, sales }))
+      .sort((a, b) => b.sales - a.sales)
+      .slice(0, 8);
+  }, [salesRows]);
+
+  const forecast = useMemo(() => {
+    if (!forecastRows.length) {
+      return {
+        method: 'moving_average',
+        window: 0,
+        predictions: []
+      };
+    }
+
+    return {
+      method: forecastRows[0].method || 'moving_average',
+      window: Number(forecastRows[0].window || 0),
+      predictions: forecastRows.map((item) => ({
+        date: item.date,
+        predictedSales: Number(item.predictedSales || 0)
+      }))
+    };
+  }, [forecastRows]);
 
   const productOptions = useMemo(
-    () => ['All Products', ...(insights?.topProducts || []).map((item) => item.productName)],
-    [insights]
+    () => ['All Products', ...topProducts.map((item) => item.productName)],
+    [topProducts]
   );
 
   const combinedSeries = useMemo(() => {
-    const historical = (insights?.dailyTrends || []).map((item) => ({
+    const historical = dailyTrends.map((item) => ({
       date: item.date,
       historicalSales: Number(item.sales),
       predictedSales: null
     }));
 
-    const totalTopProductSales = (insights?.topProducts || []).reduce((sum, item) => sum + Number(item.sales || 0), 0);
+    const totalTopProductSales = topProducts.reduce((sum, item) => sum + Number(item.sales || 0), 0);
     const selectedShare =
       selectedProduct === 'All Products'
         ? 1
-        : Number((insights?.topProducts || []).find((item) => item.productName === selectedProduct)?.sales || 0) /
+        : Number(topProducts.find((item) => item.productName === selectedProduct)?.sales || 0) /
           (totalTopProductSales || 1);
 
-    const predictions = (forecast?.predictions || []).map((item) => ({
+    const predictions = (forecast.predictions || []).map((item) => ({
       date: item.date,
       historicalSales: null,
       predictedSales: Math.round(Number(item.predictedSales) * selectedShare * 100) / 100
@@ -71,7 +156,7 @@ export default function ForecastPage() {
       const toOk = dateTo ? time <= new Date(dateTo).getTime() : true;
       return fromOk && toOk;
     });
-  }, [dateFrom, dateTo, forecast?.predictions, insights?.dailyTrends, insights?.topProducts, selectedProduct]);
+  }, [dailyTrends, topProducts, selectedProduct, forecast.predictions, dateFrom, dateTo]);
 
   const metrics = useMemo(() => {
     const historical = combinedSeries.filter((item) => item.historicalSales != null);
@@ -97,10 +182,10 @@ export default function ForecastPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight text-white">Sales Forecast</h1>
-          <p className="mt-1 text-sm text-slate-400">Predict future trends using AI insights</p>
+          <p className="mt-1 text-sm text-slate-400">Predict future trends using real-time Firebase data</p>
         </div>
-        <button type="button" onClick={load} className="rounded-lg bg-slate-800 px-4 py-2 text-sm hover:bg-slate-700">
-          Refresh
+        <button type="button" onClick={() => setError('')} className="rounded-lg bg-slate-800 px-4 py-2 text-sm hover:bg-slate-700">
+          Realtime Mode
         </button>
       </div>
 
@@ -188,8 +273,8 @@ export default function ForecastPage() {
       </div>
 
       <div className="rounded-xl border border-slate-700 bg-slate-900/70 p-4">
-        <p className="text-sm text-slate-300">Method: {forecast?.method || 'moving_average'}</p>
-        <p className="text-sm text-slate-400">Window: {forecast?.window || 0} days</p>
+        <p className="text-sm text-slate-300">Method: {forecast.method || 'moving_average'}</p>
+        <p className="text-sm text-slate-400">Window: {forecast.window || 0} days</p>
       </div>
     </div>
   );

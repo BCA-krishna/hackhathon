@@ -6,33 +6,18 @@ Use these baseline rules to enforce authenticated access and per-user data bound
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    // Optional profile docs keyed by uid.
     match /users/{userId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
     }
 
-    match /sales/{docId} {
-      allow read, write: if request.auth != null && request.resource.data.userId == request.auth.uid;
-      allow read, update, delete: if request.auth != null && resource.data.userId == request.auth.uid;
-    }
+    // Generic user-scoped data rule for salesData, alerts, forecasts, recommendations, uploads, etc.
+    match /{collection}/{doc} {
+      allow create: if request.auth != null
+                    && request.resource.data.userId == request.auth.uid;
 
-    match /inventory/{docId} {
-      allow read, write: if request.auth != null && request.resource.data.userId == request.auth.uid;
-      allow read, update, delete: if request.auth != null && resource.data.userId == request.auth.uid;
-    }
-
-    match /alerts/{docId} {
-      allow read, write: if request.auth != null && request.resource.data.userId == request.auth.uid;
-      allow read, update, delete: if request.auth != null && resource.data.userId == request.auth.uid;
-    }
-
-    match /salesData/{docId} {
-      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
-      allow read, update, delete: if request.auth != null && resource.data.userId == request.auth.uid;
-    }
-
-    match /uploads/{docId} {
-      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
-      allow read, update, delete: if request.auth != null && resource.data.userId == request.auth.uid;
+      allow read, update, delete: if request.auth != null
+                                  && resource.data.userId == request.auth.uid;
     }
   }
 }

@@ -2,7 +2,9 @@ import {
   Timestamp,
   addDoc,
   collection,
+  deleteDoc,
   doc,
+  getDocs,
   onSnapshot,
   query,
   serverTimestamp,
@@ -13,6 +15,11 @@ import { getDownloadURL, ref, uploadBytesResumable } from 'firebase/storage';
 import { db, storage } from './firebase';
 
 const MAX_FILE_SIZE = 5 * 1024 * 1024;
+
+function normalizeDate(value) {
+  if (value?.toDate) return value.toDate();
+  return new Date(value);
+}
 
 function ensureValidRecord(record, row = 0) {
   const normalized = {
@@ -80,6 +87,203 @@ async function parseFile(file) {
   }
 
   throw new Error('Only CSV and JSON files are supported.');
+}
+
+function buildDailyTrends(salesRows) {
+  const grouped = salesRows.reduce((acc, row) => {
+    const day = normalizeDate(row.date).toISOString().slice(0, 10);
+    acc[day] = (acc[day] || 0) + Number(row.sales || 0);
+    return acc;
+  }, {});
+
+  return Object.entries(grouped)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, sales]) => ({ date, sales }));
+}
+
+function buildTopProducts(salesRows) {
+  const grouped = salesRows.reduce((acc, row) => {
+    const productName = row.productName || 'Unknown';
+    acc[productName] = (acc[productName] || 0) + Number(row.sales || 0);
+    return acc;
+  }, {});
+
+  return Object.entries(grouped)
+    .map(([productName, sales]) => ({ productName, sales }))
+    .sort((a, b) => b.sales - a.sales)
+    .slice(0, 8);
+}
+
+function buildForecastRows(trendRows) {
+  const values = trendRows.map((row) => Number(row.sales || 0));
+  const window = Math.min(7, values.length || 1);
+  const movingAverage = values.length
+    ? values.slice(-window).reduce((sum, val) => sum + val, 0) / window
+    : 0;
+
+  const startDate = trendRows.length ? new Date(trendRows[trendRows.length - 1].date) : new Date();
+
+  return Array.from({ length: 7 }).map((_, idx) => {
+    const nextDate = new Date(startDate);
+    nextDate.setDate(startDate.getDate() + idx + 1);
+    return {
+      date: nextDate.toISOString().slice(0, 10),
+      predictedSales: Math.round(movingAverage * 100) / 100,
+      method: 'moving_average',
+      window
+    };
+  });
+}
+
+function buildAlerts(salesRows, trendRows) {
+  const latestByProduct = salesRows.reduce((acc, row) => {
+    const key = row.productName || 'Unknown';
+    const existing = acc[key];
+    const rowTime = normalizeDate(row.date).getTime();
+    const existingTime = existing ? normalizeDate(existing.date).getTime() : 0;
+
+    if (!existing || rowTime > existingTime) {
+      acc[key] = row;
+    }
+    return acc;
+  }, {});
+
+  const lowStockAlerts = Object.values(latestByProduct)
+    .filter((row) => Number(row.stock || 0) < 10)
+    .map((row) => ({
+      type: 'LOW_STOCK',
+      productName: row.productName,
+      message: `Low stock for ${row.productName}. Current stock: ${Number(row.stock || 0)}`,
+      severity: Number(row.stock || 0) < 5 ? 'high' : 'medium',
+      sourceDate: normalizeDate(row.date).toISOString(),
+      meta: {
+        stock: Number(row.stock || 0),
+        threshold: 10
+      }
+    }));
+
+  const recent = trendRows.slice(-2);
+  const salesDropAlerts =
+    recent.length === 2 && recent[0].sales > 0 && recent[1].sales < recent[0].sales * 0.8
+      ? [
+          {
+            type: 'SALES_DROP',
+            productName: 'All Products',
+            message: 'Sales dropped by more than 20% compared with previous day.',
+            severity: 'high',
+            sourceDate: new Date().toISOString(),
+            meta: {
+              previous: recent[0].sales,
+              current: recent[1].sales
+            }
+          }
+        ]
+      : [];
+
+  const rows = [...lowStockAlerts, ...salesDropAlerts];
+  return rows.length
+    ? rows
+    : [
+        {
+          type: 'STABLE',
+          productName: 'All Products',
+          message: 'No critical anomalies detected.',
+          severity: 'low',
+          sourceDate: new Date().toISOString(),
+          meta: {}
+        }
+      ];
+}
+
+function buildRecommendations(alertRows, topProductRows) {
+  const recommendations = [];
+  const lowStock = alertRows.find((item) => item.type === 'LOW_STOCK');
+  if (lowStock) {
+    recommendations.push({
+      action: `Restock ${lowStock.productName}`,
+      productName: lowStock.productName,
+      reason: 'Low stock was detected on a monitored item.'
+    });
+  }
+
+  if (topProductRows.length) {
+    recommendations.push({
+      action: `Promote ${topProductRows[0].productName}`,
+      productName: topProductRows[0].productName,
+      reason: 'Top-performing product can drive additional revenue with targeted campaigns.'
+    });
+  }
+
+  const salesDrop = alertRows.find((item) => item.type === 'SALES_DROP');
+  if (salesDrop) {
+    recommendations.push({
+      action: 'Launch retention offer',
+      productName: 'All Products',
+      reason: 'Recent anomaly indicates declining momentum.'
+    });
+  }
+
+  return recommendations.length
+    ? recommendations
+    : [
+        {
+          action: 'Maintain current strategy',
+          productName: 'All Products',
+          reason: 'Current data indicates stable business performance.'
+        }
+      ];
+}
+
+async function replaceCollectionForUser(collectionName, userId, rows) {
+  const existingQuery = query(collection(db, collectionName), where('userId', '==', userId));
+  const existingSnapshot = await getDocs(existingQuery);
+
+  for (const existingDoc of existingSnapshot.docs) {
+    await deleteDoc(doc(db, collectionName, existingDoc.id));
+  }
+
+  for (const row of rows) {
+    await addDoc(collection(db, collectionName), {
+      ...row,
+      userId,
+      createdAt: serverTimestamp()
+    });
+  }
+}
+
+async function loadUserSalesRows(userId) {
+  const salesQuery = query(collection(db, 'salesData'), where('userId', '==', userId));
+  const salesSnapshot = await getDocs(salesQuery);
+
+  return salesSnapshot.docs.map((docSnap) => {
+    const data = docSnap.data();
+    return {
+      id: docSnap.id,
+      ...data,
+      date: normalizeDate(data.date)
+    };
+  });
+}
+
+export async function refreshDerivedCollections(userId) {
+  const salesRows = await loadUserSalesRows(userId);
+  const trendRows = buildDailyTrends(salesRows);
+  const topProductRows = buildTopProducts(salesRows);
+  const forecastRows = buildForecastRows(trendRows);
+  const alertRows = buildAlerts(salesRows, trendRows);
+  const recommendationRows = buildRecommendations(alertRows, topProductRows);
+
+  await Promise.all([
+    replaceCollectionForUser('forecasts', userId, forecastRows),
+    replaceCollectionForUser('alerts', userId, alertRows),
+    replaceCollectionForUser('recommendations', userId, recommendationRows)
+  ]);
+
+  return {
+    forecasts: forecastRows,
+    alerts: alertRows,
+    recommendations: recommendationRows
+  };
 }
 
 export function validateUploadFile(file) {
@@ -154,6 +358,8 @@ export async function uploadFileAndIngest({ userId, file, onProgress }) {
     createdAt: serverTimestamp()
   });
 
+  await refreshDerivedCollections(userId);
+
   return { recordsCount: records.length, downloadURL };
 }
 
@@ -180,37 +386,101 @@ export async function saveManualRecord({ userId, record }) {
     status: 'success',
     createdAt: serverTimestamp()
   });
+
+  await refreshDerivedCollections(userId);
 }
 
-export function subscribeToUserSalesData(userId, onData, onError) {
-  const q = query(collection(db, 'salesData'), where('userId', '==', userId));
+function subscribeToUserCollection(collectionName, userId, mapper, onData, onError) {
+  const q = query(collection(db, collectionName), where('userId', '==', userId));
   return onSnapshot(
     q,
     (snapshot) => {
-      const records = snapshot.docs.map((docSnap) => {
-        const data = docSnap.data();
-        const dateValue = data.date?.toDate ? data.date.toDate() : new Date(data.date);
-        return { id: docSnap.id, ...data, date: dateValue };
-      });
-      onData(records);
+      const rows = snapshot.docs.map((docSnap) => mapper(docSnap));
+      onData(rows);
     },
     onError
   );
 }
 
+export function subscribeToUserSalesData(userId, onData, onError) {
+  return subscribeToUserCollection(
+    'salesData',
+    userId,
+    (docSnap) => {
+      const data = docSnap.data();
+      return {
+        id: docSnap.id,
+        ...data,
+        date: normalizeDate(data.date)
+      };
+    },
+    onData,
+    onError
+  );
+}
+
 export function subscribeToUploads(userId, onData, onError) {
-  const q = query(collection(db, 'uploads'), where('userId', '==', userId));
-  return onSnapshot(
-    q,
-    (snapshot) => {
-      const rows = snapshot.docs
-        .map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
-        .sort((a, b) => {
-          const aTime = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : 0;
-          const bTime = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : 0;
-          return bTime - aTime;
-        });
-      onData(rows);
+  return subscribeToUserCollection(
+    'uploads',
+    userId,
+    (docSnap) => ({
+      id: docSnap.id,
+      ...docSnap.data()
+    }),
+    (rows) => {
+      const sorted = rows.sort((a, b) => {
+        const aTime = normalizeDate(a.createdAt || 0).getTime() || 0;
+        const bTime = normalizeDate(b.createdAt || 0).getTime() || 0;
+        return bTime - aTime;
+      });
+      onData(sorted);
+    },
+    onError
+  );
+}
+
+export function subscribeToAlerts(userId, onData, onError) {
+  return subscribeToUserCollection(
+    'alerts',
+    userId,
+    (docSnap) => ({ id: docSnap.id, ...docSnap.data() }),
+    (rows) => {
+      const sorted = rows.sort((a, b) => {
+        const aTime = normalizeDate(a.createdAt || 0).getTime() || 0;
+        const bTime = normalizeDate(b.createdAt || 0).getTime() || 0;
+        return bTime - aTime;
+      });
+      onData(sorted);
+    },
+    onError
+  );
+}
+
+export function subscribeToRecommendations(userId, onData, onError) {
+  return subscribeToUserCollection(
+    'recommendations',
+    userId,
+    (docSnap) => ({ id: docSnap.id, ...docSnap.data() }),
+    (rows) => {
+      const sorted = rows.sort((a, b) => {
+        const aTime = normalizeDate(a.createdAt || 0).getTime() || 0;
+        const bTime = normalizeDate(b.createdAt || 0).getTime() || 0;
+        return bTime - aTime;
+      });
+      onData(sorted);
+    },
+    onError
+  );
+}
+
+export function subscribeToForecasts(userId, onData, onError) {
+  return subscribeToUserCollection(
+    'forecasts',
+    userId,
+    (docSnap) => ({ id: docSnap.id, ...docSnap.data() }),
+    (rows) => {
+      const sorted = rows.sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')));
+      onData(sorted);
     },
     onError
   );

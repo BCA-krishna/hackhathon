@@ -3,7 +3,13 @@ import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Too
 import Spinner from '../components/Spinner';
 import ErrorBanner from '../components/ErrorBanner';
 import { useAuth } from '../context/AuthContext';
-import { subscribeToUploads, subscribeToUserSalesData } from '../services/salesDataService';
+import {
+  subscribeToAlerts,
+  subscribeToForecasts,
+  subscribeToRecommendations,
+  subscribeToUploads,
+  subscribeToUserSalesData
+} from '../services/salesDataService';
 
 const fallbackTrend = [
   { date: '2026-04-07', sales: 140 },
@@ -27,6 +33,9 @@ export default function DashboardPage() {
 
   const [salesRows, setSalesRows] = useState([]);
   const [uploadRows, setUploadRows] = useState([]);
+  const [alertRows, setAlertRows] = useState([]);
+  const [recommendationRows, setRecommendationRows] = useState([]);
+  const [forecastRows, setForecastRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -43,9 +52,12 @@ export default function DashboardPage() {
 
     let salesInitialized = false;
     let uploadsInitialized = false;
+    let alertsInitialized = false;
+    let recInitialized = false;
+    let forecastInitialized = false;
 
     const doneInit = () => {
-      if (salesInitialized && uploadsInitialized) {
+      if (salesInitialized && uploadsInitialized && alertsInitialized && recInitialized && forecastInitialized) {
         setLoading(false);
       }
     };
@@ -78,9 +90,54 @@ export default function DashboardPage() {
       }
     );
 
+    const unsubAlerts = subscribeToAlerts(
+      user.uid,
+      (rows) => {
+        setAlertRows(rows);
+        alertsInitialized = true;
+        doneInit();
+      },
+      (snapshotError) => {
+        setError(snapshotError.message || 'Failed to load alerts');
+        alertsInitialized = true;
+        doneInit();
+      }
+    );
+
+    const unsubRecommendations = subscribeToRecommendations(
+      user.uid,
+      (rows) => {
+        setRecommendationRows(rows);
+        recInitialized = true;
+        doneInit();
+      },
+      (snapshotError) => {
+        setError(snapshotError.message || 'Failed to load recommendations');
+        recInitialized = true;
+        doneInit();
+      }
+    );
+
+    const unsubForecasts = subscribeToForecasts(
+      user.uid,
+      (rows) => {
+        setForecastRows(rows);
+        forecastInitialized = true;
+        doneInit();
+      },
+      (snapshotError) => {
+        setError(snapshotError.message || 'Failed to load forecasts');
+        forecastInitialized = true;
+        doneInit();
+      }
+    );
+
     return () => {
       unsubSales();
       unsubUploads();
+      unsubAlerts();
+      unsubRecommendations();
+      unsubForecasts();
     };
   }, [user?.uid]);
 
@@ -118,6 +175,10 @@ export default function DashboardPage() {
   }, [salesRows]);
 
   const alerts = useMemo(() => {
+    if (alertRows.length) {
+      return alertRows;
+    }
+
     if (!salesRows.length) {
       return [
         { type: 'LOW_STOCK', message: 'Low stock for Product A', severity: 'high' },
@@ -152,9 +213,13 @@ export default function DashboardPage() {
     return rows.length
       ? rows
       : [{ type: 'STABLE', message: 'No critical alerts. Business health looks stable.', severity: 'low' }];
-  }, [salesRows, trendData]);
+  }, [alertRows, salesRows, trendData]);
 
   const recommendations = useMemo(() => {
+    if (recommendationRows.length) {
+      return recommendationRows.map((item) => item.reason || item.action || 'Recommendation');
+    }
+
     const rows = [];
 
     const lowStockAlert = alerts.find((item) => item.type === 'LOW_STOCK');
@@ -172,7 +237,7 @@ export default function DashboardPage() {
     }
 
     return rows.length ? rows : ['Maintain current strategy and keep monitoring daily trends.'];
-  }, [alerts, productData]);
+  }, [alerts, productData, recommendationRows]);
 
   const kpi = useMemo(() => {
     const totalSales = trendData.reduce((sum, row) => sum + Number(row.sales || 0), 0);
@@ -184,9 +249,10 @@ export default function DashboardPage() {
       totalSales,
       revenue: totalSales,
       uploadsCount: uploadRows.length,
-      growthPercent: Math.round(growthPercent * 10) / 10
+      growthPercent: Math.round(growthPercent * 10) / 10,
+      forecastPoints: forecastRows.length
     };
-  }, [trendData, uploadRows.length]);
+  }, [trendData, uploadRows.length, forecastRows.length]);
 
   if (loading) return <Spinner label="Loading dashboard" />;
 
@@ -219,6 +285,10 @@ export default function DashboardPage() {
           <p className={`mt-2 text-3xl font-semibold ${kpi.growthPercent >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
             {kpi.growthPercent}%
           </p>
+        </article>
+        <article className="rounded-2xl border border-slate-700 bg-slate-900/70 p-4 sm:col-span-2 xl:col-span-4">
+          <p className="text-xs uppercase tracking-wide text-slate-400">Forecast Points Loaded</p>
+          <p className="mt-2 text-2xl font-semibold text-cyan-300">{kpi.forecastPoints}</p>
         </article>
       </section>
 
