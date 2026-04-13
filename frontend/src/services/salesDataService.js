@@ -9,6 +9,7 @@ import {
   onSnapshot,
   query,
   serverTimestamp,
+  updateDoc,
   where,
   writeBatch
 } from 'firebase/firestore';
@@ -956,6 +957,115 @@ export async function saveManualRecord({ userId, record }) {
   return result;
 }
 
+export async function updateSalesRecord({ userId, recordId, record }) {
+  if (!userId) {
+    throw new Error('Please sign in before updating data.');
+  }
+  if (!recordId) {
+    throw new Error('Missing record id.');
+  }
+
+  const normalized = ensureValidRecord(record, 1);
+  const warnings = [];
+
+  try {
+    await updateDoc(doc(db, 'salesData', recordId), {
+      productName: normalized.productName,
+      sales: normalized.sales,
+      stock: normalized.stock,
+      date: Timestamp.fromDate(normalized.date),
+      updatedAt: serverTimestamp()
+    });
+
+    debugInfo('sales_update_success', { userId, recordId });
+
+    await logActivity({
+      userId,
+      action: 'sales_record_updated',
+      status: 'success',
+      message: 'Sales record updated successfully.',
+      meta: {
+        recordId,
+        productName: normalized.productName
+      }
+    });
+  } catch (error) {
+    const message = formatFirestoreError(error, 'Failed to update sales record.');
+    debugError('sales_update_failed', error, { userId, recordId });
+    await logActivity({
+      userId,
+      action: 'sales_record_update_failed',
+      status: 'error',
+      message,
+      meta: {
+        recordId
+      }
+    });
+    throw new Error(message);
+  }
+
+  try {
+    await refreshDerivedCollections(userId);
+  } catch {
+    warnings.push('Record updated, but insights refresh is pending.');
+  }
+
+  return {
+    warning: warnings.join(' ')
+  };
+}
+
+export async function deleteSalesRecord({ userId, recordId, productName = '' }) {
+  if (!userId) {
+    throw new Error('Please sign in before deleting data.');
+  }
+  if (!recordId) {
+    throw new Error('Missing record id.');
+  }
+
+  const warnings = [];
+
+  try {
+    await deleteDoc(doc(db, 'salesData', recordId));
+    debugInfo('sales_delete_success', { userId, recordId });
+
+    await logActivity({
+      userId,
+      action: 'sales_record_deleted',
+      status: 'success',
+      message: 'Sales record deleted successfully.',
+      meta: {
+        recordId,
+        productName
+      }
+    });
+  } catch (error) {
+    const message = formatFirestoreError(error, 'Failed to delete sales record.');
+    debugError('sales_delete_failed', error, { userId, recordId });
+    await logActivity({
+      userId,
+      action: 'sales_record_delete_failed',
+      status: 'error',
+      message,
+      meta: {
+        recordId,
+        productName
+      }
+    });
+    throw new Error(message);
+  }
+
+  try {
+    await refreshDerivedCollections(userId);
+  } catch {
+    warnings.push('Record deleted, but insights refresh is pending.');
+  }
+
+  return {
+    warning: warnings.join(' ')
+  };
+}
+
 function subscribeToUserCollection(collectionName, userId, mapper, onData, onError) {
   const q = query(collection(db, collectionName), where('userId', '==', userId));
   return onSnapshot(
@@ -1052,6 +1162,23 @@ export function subscribeToForecasts(userId, onData, onError) {
     (docSnap) => ({ id: docSnap.id, ...docSnap.data() }),
     (rows) => {
       const sorted = rows.sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')));
+      onData(sorted);
+    },
+    onError
+  );
+}
+
+export function subscribeToActivityLogs(userId, onData, onError) {
+  return subscribeToUserCollection(
+    'activityLogs',
+    userId,
+    (docSnap) => ({ id: docSnap.id, ...docSnap.data() }),
+    (rows) => {
+      const sorted = rows.sort((a, b) => {
+        const aTime = normalizeDate(a.createdAt || 0).getTime() || 0;
+        const bTime = normalizeDate(b.createdAt || 0).getTime() || 0;
+        return bTime - aTime;
+      });
       onData(sorted);
     },
     onError
