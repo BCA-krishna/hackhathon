@@ -83,8 +83,8 @@ export default function DashboardPage() {
         uploadsInitialized = true;
         doneInit();
       },
-      (snapshotError) => {
-        setError(snapshotError.message || 'Failed to load upload activity');
+      () => {
+        setUploadRows([]);
         uploadsInitialized = true;
         doneInit();
       }
@@ -97,8 +97,8 @@ export default function DashboardPage() {
         alertsInitialized = true;
         doneInit();
       },
-      (snapshotError) => {
-        setError(snapshotError.message || 'Failed to load alerts');
+      () => {
+        setAlertRows([]);
         alertsInitialized = true;
         doneInit();
       }
@@ -111,8 +111,8 @@ export default function DashboardPage() {
         recInitialized = true;
         doneInit();
       },
-      (snapshotError) => {
-        setError(snapshotError.message || 'Failed to load recommendations');
+      () => {
+        setRecommendationRows([]);
         recInitialized = true;
         doneInit();
       }
@@ -125,8 +125,8 @@ export default function DashboardPage() {
         forecastInitialized = true;
         doneInit();
       },
-      (snapshotError) => {
-        setError(snapshotError.message || 'Failed to load forecasts');
+      () => {
+        setForecastRows([]);
         forecastInitialized = true;
         doneInit();
       }

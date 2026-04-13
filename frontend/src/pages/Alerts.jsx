@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import Spinner from '../components/Spinner';
 import ErrorBanner from '../components/ErrorBanner';
 import { useAuth } from '../context/AuthContext';
-import { subscribeToAlerts, subscribeToRecommendations } from '../services/salesDataService';
+import { subscribeToAlerts, subscribeToRecommendations, subscribeToUserSalesData } from '../services/salesDataService';
 
 function severityClasses(severity) {
   if (severity === 'high') return 'border-rose-400/40 bg-rose-500/10 text-rose-200';
@@ -29,6 +29,7 @@ export default function AlertsPage() {
 
   const [alerts, setAlerts] = useState([]);
   const [recommendations, setRecommendations] = useState([]);
+  const [salesRows, setSalesRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -47,12 +48,27 @@ export default function AlertsPage() {
 
     let alertsReady = false;
     let recReady = false;
+    let salesReady = false;
 
     const done = () => {
-      if (alertsReady && recReady) {
+      if (alertsReady && recReady && salesReady) {
         setLoading(false);
       }
     };
+
+    const unsubSales = subscribeToUserSalesData(
+      user.uid,
+      (rows) => {
+        setSalesRows(rows);
+        salesReady = true;
+        done();
+      },
+      (snapshotError) => {
+        setError(snapshotError.message || 'Failed to load sales data.');
+        salesReady = true;
+        done();
+      }
+    );
 
     const unsubAlerts = subscribeToAlerts(
       user.uid,
@@ -61,8 +77,8 @@ export default function AlertsPage() {
         alertsReady = true;
         done();
       },
-      (snapshotError) => {
-        setError(snapshotError.message || 'Failed to load alerts.');
+      () => {
+        setAlerts([]);
         alertsReady = true;
         done();
       }
@@ -75,18 +91,58 @@ export default function AlertsPage() {
         recReady = true;
         done();
       },
-      (snapshotError) => {
-        setError(snapshotError.message || 'Failed to load recommendations.');
+      () => {
+        setRecommendations([]);
         recReady = true;
         done();
       }
     );
 
     return () => {
+      unsubSales();
       unsubAlerts();
       unsubRecommendations();
     };
   }, [authLoading, user?.uid]);
+
+  const computedAlerts = alerts.length
+    ? alerts
+    : (() => {
+        if (!salesRows.length) return [];
+
+        const latestByProduct = salesRows.reduce((acc, row) => {
+          const key = row.productName || 'Unknown';
+          const existing = acc[key];
+          const rowTime = new Date(row.date).getTime();
+          const existingTime = existing ? new Date(existing.date).getTime() : 0;
+          if (!existing || rowTime > existingTime) {
+            acc[key] = row;
+          }
+          return acc;
+        }, {});
+
+        return Object.values(latestByProduct)
+          .filter((row) => Number(row.stock || 0) < 10)
+          .map((row) => ({
+            id: row.id,
+            type: 'LOW_STOCK',
+            message: `Low stock for ${row.productName}`,
+            severity: Number(row.stock || 0) < 5 ? 'high' : 'medium',
+            createdAt: new Date().toISOString()
+          }));
+      })();
+
+  const computedRecommendations = recommendations.length
+    ? recommendations
+    : (() => {
+        if (!computedAlerts.length) return [];
+        return computedAlerts.map((item) => ({
+          id: `${item.id || item.type}-rec`,
+          action: `Restock ${item.message.replace('Low stock for ', '')}`,
+          productName: item.message.replace('Low stock for ', ''),
+          reason: 'Inventory threshold breached.'
+        }));
+      })();
 
   if (loading) return <Spinner label="Loading alerts" />;
 
@@ -110,7 +166,7 @@ export default function AlertsPage() {
 
           <div className="space-y-3">
             {alerts.length ? (
-              alerts.map((alert, idx) => (
+              computedAlerts.map((alert, idx) => (
                 <div key={alert.id || idx} className={`rounded-xl border p-3 ${severityClasses(alert.severity)}`}>
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex items-start gap-3">
@@ -142,7 +198,7 @@ export default function AlertsPage() {
 
           <div className="space-y-3">
             {recommendations.length ? (
-              recommendations.map((rec, idx) => (
+              computedRecommendations.map((rec, idx) => (
                 <div key={rec.id || `${rec.productName}-${idx}`} className={`rounded-xl border p-3 ${recommendationTone(rec.action || '')}`}>
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-sm font-semibold">{rec.action}</p>

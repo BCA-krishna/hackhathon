@@ -68,8 +68,8 @@ export default function ForecastPage() {
         forecastsReady = true;
         done();
       },
-      (snapshotError) => {
-        setError(snapshotError.message || 'Failed to load forecast data.');
+      () => {
+        setForecastRows([]);
         forecastsReady = true;
         done();
       }
