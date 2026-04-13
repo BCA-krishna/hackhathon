@@ -108,10 +108,32 @@ export default function ForecastPage() {
 
   const forecast = useMemo(() => {
     if (!forecastRows.length) {
+      if (!dailyTrends.length) {
+        return {
+          method: 'moving_average',
+          window: 0,
+          predictions: []
+        };
+      }
+
+      const values = dailyTrends.map((row) => Number(row.sales || 0));
+      const window = Math.min(5, values.length || 1);
+      const movingAverage = values.length
+        ? values.slice(-window).reduce((sum, val) => sum + val, 0) / window
+        : 0;
+      const startDate = dailyTrends.length ? new Date(dailyTrends[dailyTrends.length - 1].date) : new Date();
+
       return {
         method: 'moving_average',
-        window: 0,
-        predictions: []
+        window,
+        predictions: Array.from({ length: 7 }).map((_, idx) => {
+          const nextDate = new Date(startDate);
+          nextDate.setDate(startDate.getDate() + idx + 1);
+          return {
+            date: nextDate.toISOString().slice(0, 10),
+            predictedSales: Math.round(movingAverage * 100) / 100
+          };
+        })
       };
     }
 
@@ -123,7 +145,7 @@ export default function ForecastPage() {
         predictedSales: Number(item.predictedSales || 0)
       }))
     };
-  }, [forecastRows]);
+  }, [forecastRows, dailyTrends]);
 
   const productOptions = useMemo(
     () => ['All Products', ...topProducts.map((item) => item.productName)],
@@ -183,6 +205,7 @@ export default function ForecastPage() {
         <div>
           <h1 className="text-3xl font-bold tracking-tight text-white">Sales Forecast</h1>
           <p className="mt-1 text-sm text-slate-400">Predict future trends using real-time Firebase data</p>
+          {!salesRows.length ? <p className="mt-1 text-xs text-amber-300">No live data found yet. Upload records to view forecast.</p> : null}
         </div>
         <button type="button" onClick={() => setError('')} className="rounded-lg bg-slate-800 px-4 py-2 text-sm hover:bg-slate-700">
           Realtime Mode

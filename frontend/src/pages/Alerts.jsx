@@ -152,6 +152,7 @@ export default function AlertsPage() {
         <div>
           <h1 className="text-3xl font-bold tracking-tight text-white">Alerts & Recommendations</h1>
           <p className="mt-1 text-sm text-slate-400">Stay ahead with real-time warnings and smart suggestions</p>
+          {!salesRows.length ? <p className="mt-1 text-xs text-amber-300">No live data found yet. Upload records to view alerts.</p> : null}
         </div>
         <button type="button" onClick={() => setError('')} className="rounded-lg bg-slate-800 px-4 py-2 text-sm hover:bg-slate-700">
           Realtime Mode

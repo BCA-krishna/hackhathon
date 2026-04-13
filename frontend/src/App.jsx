@@ -9,6 +9,8 @@ import AppVideoBackground from './components/AppVideoBackground';
 const LoginPage = lazy(() => import('./pages/Login'));
 const LandingPage = lazy(() => import('./pages/Landing'));
 const DashboardPage = lazy(() => import('./pages/Dashboard'));
+const AnalyticsPage = lazy(() => import('./pages/Analytics'));
+const FeedbackInsightsPage = lazy(() => import('./pages/FeedbackInsights'));
 const UploadDataPage = lazy(() => import('./pages/UploadData'));
 const ForecastPage = lazy(() => import('./pages/Forecast'));
 const AlertsPage = lazy(() => import('./pages/Alerts'));
@@ -64,6 +66,8 @@ export default function App() {
               }
             >
               <Route path="/dashboard" element={<DashboardPage />} />
+              <Route path="/analytics" element={<AnalyticsPage />} />
+              <Route path="/feedback-insights" element={<FeedbackInsightsPage />} />
               <Route path="/upload" element={<UploadDataPage />} />
               <Route path="/forecast" element={<ForecastPage />} />
               <Route path="/alerts" element={<AlertsPage />} />

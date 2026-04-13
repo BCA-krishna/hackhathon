@@ -1,4 +1,4 @@
-import backgroundVideo from '../assets/redorb.mp4';
+import backgroundVideo from '../assets/PixVerse_V6_Extend_360P_meke_a_little_bit_more.mp4';
 
 export default function AppVideoBackground() {
   return (

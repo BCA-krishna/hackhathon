@@ -5,6 +5,8 @@ import Button3D from '../components/Button3D';
 import { useAuth } from '../context/AuthContext';
 import {
   formatFirestoreError,
+  ingestCsvTextAndSeedData,
+  removeUserDataset,
   saveManualRecord,
   subscribeToUploads,
   uploadFileAndIngest,
@@ -23,6 +25,7 @@ export default function UploadDataPage() {
   const [validationMessage, setValidationMessage] = useState('');
   const [history, setHistory] = useState([]);
   const [toast, setToast] = useState('');
+  const [removingDataset, setRemovingDataset] = useState(false);
   const fileInputRef = useRef(null);
 
   const hasManualError = useMemo(
@@ -133,6 +136,71 @@ export default function UploadDataPage() {
     }
   };
 
+  const handleImportRealDataset = async () => {
+    setLoading(true);
+    setError('');
+    setSuccess('');
+
+    try {
+      if (!user?.uid) {
+        throw new Error('Please sign in before importing dataset.');
+      }
+
+      const response = await fetch('/evaluator_chart_metrics_data.csv');
+      if (!response.ok) {
+        throw new Error('Dataset file not found in frontend/public directory.');
+      }
+
+      const csvText = await response.text();
+      const result = await ingestCsvTextAndSeedData({
+        userId: user.uid,
+        csvText,
+        sourceName: 'evaluator_chart_metrics_data.csv'
+      });
+
+      setSuccess(`Real dataset imported successfully. ${result.recordsCount} records integrated.`);
+      setToast('Real dataset imported');
+    } catch (err) {
+      setError(formatFirestoreError(err, 'Failed to import real dataset.'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRemoveDataset = async () => {
+    if (!user?.uid) {
+      setError('Please sign in before removing dataset.');
+      return;
+    }
+
+    const confirmed = window.confirm('Remove all your uploaded sales dataset and derived analytics data?');
+    if (!confirmed) return;
+
+    setRemovingDataset(true);
+    setError('');
+    setSuccess('');
+
+    try {
+      const result = await removeUserDataset({ userId: user.uid });
+      const totalRemoved = Object.values(result.removed || {}).reduce((sum, count) => sum + Number(count || 0), 0);
+      const failedCollections = Object.keys(result.failed || {});
+      if (failedCollections.length) {
+        setSuccess(
+          `Dataset removed with partial issues. ${totalRemoved} records deleted. Failed collections: ${failedCollections.join(', ')}`
+        );
+      } else {
+        setSuccess(`Dataset removed successfully. ${totalRemoved} records deleted.`);
+      }
+      setToast('Dataset removed');
+      setFile(null);
+      setValidationMessage('');
+    } catch (err) {
+      setError(formatFirestoreError(err, 'Failed to remove dataset.'));
+    } finally {
+      setRemovingDataset(false);
+    }
+  };
+
   const onDrop = (event) => {
     event.preventDefault();
     setDragActive(false);
@@ -151,6 +219,40 @@ export default function UploadDataPage() {
       {validationMessage ? (
         <div className="rounded-lg border border-amber-400/30 bg-amber-500/10 p-3 text-sm text-amber-200">{validationMessage}</div>
       ) : null}
+
+      <div className="rounded-2xl border border-cyan-500/30 bg-cyan-500/10 p-4">
+        <p className="text-sm font-semibold text-cyan-200">Use Demo Sales Dataset</p>
+        <p className="mt-1 text-xs text-cyan-100/80">
+          Import a bundled demo dataset directly to Firestore for instant trend and analytics visualization.
+        </p>
+        <Button3D
+          type="button"
+          color1="#0891b2"
+          color2="#155e75"
+          disabled={loading}
+          className="mt-3"
+          onClick={handleImportRealDataset}
+        >
+          {loading ? 'Importing...' : 'Import Demo Dataset'}
+        </Button3D>
+      </div>
+
+      <div className="rounded-2xl border border-rose-500/30 bg-rose-500/10 p-4">
+        <p className="text-sm font-semibold text-rose-200">Remove Dataset</p>
+        <p className="mt-1 text-xs text-rose-100/80">
+          This will delete your imported sales data and related analytics outputs (alerts, forecasts, recommendations).
+        </p>
+        <Button3D
+          type="button"
+          color1="#dc2626"
+          color2="#7f1d1d"
+          disabled={loading || removingDataset}
+          className="mt-3"
+          onClick={handleRemoveDataset}
+        >
+          {removingDataset ? 'Removing...' : 'Remove All Dataset'}
+        </Button3D>
+      </div>
 
       <div className="grid gap-6 xl:grid-cols-3">
         <form onSubmit={handleFileUpload} className="rounded-2xl border border-slate-700 bg-slate-900/70 p-4 xl:col-span-2">

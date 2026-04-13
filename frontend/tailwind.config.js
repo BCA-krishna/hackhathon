@@ -5,7 +5,7 @@ export default {
     extend: {
       colors: {
         base: '#0f172a',
-        panel: '#111827',
+        panel: '#212f4e',
         accent: '#22c55e',
         accentSoft: '#86efac',
         danger: '#f43f5e'

@@ -2,11 +2,24 @@ const storeService = require('./storeService');
 const ApiError = require('../utils/apiError');
 
 function normalizeRecord(record) {
+  const toNumberOrNull = (value) => {
+    if (value === undefined || value === null || value === '') {
+      return null;
+    }
+    const num = Number(value);
+    return Number.isNaN(num) ? null : num;
+  };
+
   return {
     productName: String(record.productName || '').trim(),
     sales: Number(record.sales),
     stock: Number(record.stock),
-    date: new Date(record.date)
+    date: new Date(record.date),
+    category: String(record.category || record.productCategory || '').trim() || null,
+    quantity: toNumberOrNull(record.quantity),
+    price: toNumberOrNull(record.price),
+    cost: toNumberOrNull(record.cost),
+    profit: toNumberOrNull(record.profit)
   };
 }
 

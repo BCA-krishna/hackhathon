@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import LandingPatternBackground from '../components/LandingPatternBackground';
-import redorbVideo from '../assets/redorb.mp4';
+import redorbVideo from '../assets/PixVerse_V6_Extend_360P_meke_a_little_bit_more.mp4';
 
 const featurePills = [
   'AI-Based Forecasting',

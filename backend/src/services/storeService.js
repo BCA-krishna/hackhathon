@@ -129,6 +129,11 @@ async function createSalesBulk(userId, records) {
         userId: String(userId),
         productName: record.productName,
         sales: record.sales,
+        category: record.category || null,
+        quantity: record.quantity ?? null,
+        price: record.price ?? null,
+        cost: record.cost ?? null,
+        profit: record.profit ?? null,
         date: toDate(record.date),
         createdAt: nowIso(),
         updatedAt: nowIso()
@@ -146,6 +151,11 @@ async function createSalesBulk(userId, records) {
       userId: String(userId),
       productName: record.productName,
       sales: record.sales,
+      category: record.category || null,
+      quantity: record.quantity ?? null,
+      price: record.price ?? null,
+      cost: record.cost ?? null,
+      profit: record.profit ?? null,
       date: toDate(record.date),
       createdAt: new Date(),
       updatedAt: new Date()
@@ -178,6 +188,7 @@ async function upsertInventoryBulk(userId, records) {
       const existing = memoryStore.inventory.find((item) => item.id === key);
       if (existing) {
         existing.stock = record.stock;
+        existing.category = record.category || existing.category || null;
         existing.date = toDate(record.date);
         existing.updatedAt = nowIso();
       } else {
@@ -185,6 +196,7 @@ async function upsertInventoryBulk(userId, records) {
           id: key,
           userId: String(userId),
           productName: record.productName,
+          category: record.category || null,
           stock: record.stock,
           date: toDate(record.date),
           createdAt: nowIso(),
@@ -206,6 +218,7 @@ async function upsertInventoryBulk(userId, records) {
       {
         userId: String(userId),
         productName: record.productName,
+        category: record.category || null,
         stock: record.stock,
         date: toDate(record.date),
         updatedAt: new Date()

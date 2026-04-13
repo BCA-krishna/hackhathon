@@ -291,22 +291,47 @@ function buildTopProducts(salesRows) {
 }
 
 function buildForecastRows(trendRows) {
-  const values = trendRows.map((row) => Number(row.sales || 0));
-  const window = Math.min(7, values.length || 1);
-  const movingAverage = values.length
-    ? values.slice(-window).reduce((sum, val) => sum + val, 0) / window
-    : 0;
-
   const startDate = trendRows.length ? new Date(trendRows[trendRows.length - 1].date) : new Date();
+  const points = trendRows.map((row, idx) => ({
+    x: idx,
+    y: Number(row.sales || 0),
+    date: new Date(row.date)
+  }));
+
+  const n = points.length || 1;
+  const sumX = points.reduce((acc, p) => acc + p.x, 0);
+  const sumY = points.reduce((acc, p) => acc + p.y, 0);
+  const sumXY = points.reduce((acc, p) => acc + p.x * p.y, 0);
+  const sumXX = points.reduce((acc, p) => acc + p.x * p.x, 0);
+  const denominator = n * sumXX - sumX * sumX;
+  const slope = denominator ? (n * sumXY - sumX * sumY) / denominator : 0;
+  const intercept = n ? (sumY - slope * sumX) / n : 0;
+
+  const weekdayAverages = Array.from({ length: 7 }).map(() => ({ sum: 0, count: 0 }));
+  points.forEach((p) => {
+    const wd = p.date.getDay();
+    weekdayAverages[wd].sum += p.y;
+    weekdayAverages[wd].count += 1;
+  });
+
+  const globalAvg = n ? sumY / n : 0;
+  const weekdayFactor = weekdayAverages.map((entry) => {
+    if (!entry.count || !globalAvg) return 1;
+    return (entry.sum / entry.count) / globalAvg;
+  });
 
   return Array.from({ length: 7 }).map((_, idx) => {
     const nextDate = new Date(startDate);
     nextDate.setDate(startDate.getDate() + idx + 1);
+    const trendComponent = intercept + slope * (n + idx);
+    const seasonalComponent = weekdayFactor[nextDate.getDay()] || 1;
+    const prediction = Math.max(0, trendComponent * seasonalComponent);
+
     return {
       date: nextDate.toISOString().slice(0, 10),
-      predictedSales: Math.round(movingAverage * 100) / 100,
-      method: 'moving_average',
-      window
+      predictedSales: Math.round(prediction * 100) / 100,
+      method: 'trend_seasonality',
+      window: Math.min(14, n)
     };
   });
 }
@@ -371,22 +396,58 @@ function buildAlerts(salesRows, trendRows) {
       ];
 }
 
-function buildRecommendations(alertRows, topProductRows) {
+function buildRecommendations(alertRows, topProductRows, salesRows = [], trendRows = []) {
   const recommendations = [];
+  const latestByProduct = salesRows.reduce((acc, row) => {
+    const key = row.productName || 'Unknown';
+    const rowTime = normalizeDate(row.date).getTime();
+    const existingTime = acc[key] ? normalizeDate(acc[key].date).getTime() : 0;
+    if (!acc[key] || rowTime > existingTime) {
+      acc[key] = row;
+    }
+    return acc;
+  }, {});
+
+  const totalTopSales = topProductRows.reduce((sum, row) => sum + Number(row.sales || 0), 0);
+  const topThreeShare =
+    totalTopSales > 0
+      ? (topProductRows.slice(0, 3).reduce((sum, row) => sum + Number(row.sales || 0), 0) / totalTopSales) * 100
+      : 0;
+
+  const recentTrend = trendRows.slice(-7);
+  const previousTrend = trendRows.slice(-14, -7);
+  const recentAvg = recentTrend.length ? recentTrend.reduce((sum, row) => sum + Number(row.sales || 0), 0) / recentTrend.length : 0;
+  const previousAvg = previousTrend.length
+    ? previousTrend.reduce((sum, row) => sum + Number(row.sales || 0), 0) / previousTrend.length
+    : 0;
+  const trendShift = previousAvg > 0 ? ((recentAvg - previousAvg) / previousAvg) * 100 : 0;
+
   const lowStock = alertRows.find((item) => item.type === 'LOW_STOCK');
   if (lowStock) {
+    const latestProductRow = latestByProduct[lowStock.productName] || {};
+    const stock = Number(latestProductRow.stock ?? lowStock.meta?.stock ?? 0);
     recommendations.push({
       action: `Restock ${lowStock.productName}`,
       productName: lowStock.productName,
-      reason: 'Low stock was detected on a monitored item.'
+      reason: 'Low stock was detected on a monitored item.',
+      priority: stock < 5 ? 'high' : 'medium',
+      confidence: 92,
+      expectedImpact: 'Reduce stock-out risk and protect near-term revenue.',
+      metric: `Current stock: ${stock}`
     });
   }
 
   if (topProductRows.length) {
+    const leader = topProductRows[0];
+    const leaderShare = totalTopSales > 0 ? (Number(leader.sales || 0) / totalTopSales) * 100 : 0;
     recommendations.push({
-      action: `Promote ${topProductRows[0].productName}`,
-      productName: topProductRows[0].productName,
-      reason: 'Top-performing product can drive additional revenue with targeted campaigns.'
+      action: `Promote ${leader.productName}`,
+      productName: leader.productName,
+      reason: 'Top-performing product can drive additional revenue with targeted campaigns.',
+      priority: 'medium',
+      confidence: 86,
+      expectedImpact: 'Accelerate growth from the current best-selling item.',
+      metric: `Top-product share: ${leaderShare.toFixed(1)}%`
     });
   }
 
@@ -395,17 +456,64 @@ function buildRecommendations(alertRows, topProductRows) {
     recommendations.push({
       action: 'Launch retention offer',
       productName: 'All Products',
-      reason: 'Recent anomaly indicates declining momentum.'
+      reason: 'Recent anomaly indicates declining momentum.',
+      priority: 'high',
+      confidence: 88,
+      expectedImpact: 'Recover short-term revenue and customer retention.',
+      metric: `Recent trend shift: ${trendShift.toFixed(1)}%`
     });
   }
 
-  return recommendations.length
-    ? recommendations
+  if (topThreeShare > 75) {
+    recommendations.push({
+      action: 'Diversify sales mix',
+      productName: 'Top 3 Products',
+      reason: 'Revenue concentration is high across few products.',
+      priority: 'medium',
+      confidence: 81,
+      expectedImpact: 'Lower concentration risk and stabilize revenue variability.',
+      metric: `Top 3 share: ${topThreeShare.toFixed(1)}%`
+    });
+  }
+
+  if (trendRows.length >= 7 && trendShift < -10) {
+    recommendations.push({
+      action: 'Run 7-day demand recovery campaign',
+      productName: 'All Products',
+      reason: 'Recent week performance is significantly below prior week.',
+      priority: 'high',
+      confidence: 84,
+      expectedImpact: 'Improve demand velocity and prevent sustained decline.',
+      metric: `WoW trend shift: ${trendShift.toFixed(1)}%`
+    });
+  }
+
+  const unique = recommendations.reduce((acc, item) => {
+    if (!acc.some((entry) => entry.action === item.action && entry.productName === item.productName)) {
+      acc.push(item);
+    }
+    return acc;
+  }, []);
+
+  const priorityOrder = { high: 0, medium: 1, low: 2 };
+  unique.sort((a, b) => {
+    const pA = priorityOrder[a.priority] ?? 99;
+    const pB = priorityOrder[b.priority] ?? 99;
+    if (pA !== pB) return pA - pB;
+    return Number(b.confidence || 0) - Number(a.confidence || 0);
+  });
+
+  return unique.length
+    ? unique.slice(0, 5)
     : [
         {
           action: 'Maintain current strategy',
           productName: 'All Products',
-          reason: 'Current data indicates stable business performance.'
+          reason: 'Current data indicates stable business performance.',
+          priority: 'low',
+          confidence: 72,
+          expectedImpact: 'Maintain current outcomes while monitoring anomalies.',
+          metric: 'No major risk indicators detected'
         }
       ];
 }
@@ -447,7 +555,7 @@ export async function refreshDerivedCollections(userId) {
   const topProductRows = buildTopProducts(salesRows);
   const forecastRows = buildForecastRows(trendRows);
   const alertRows = buildAlerts(salesRows, trendRows);
-  const recommendationRows = buildRecommendations(alertRows, topProductRows);
+  const recommendationRows = buildRecommendations(alertRows, topProductRows, salesRows, trendRows);
 
   await Promise.all([
     replaceCollectionForUser('forecasts', userId, forecastRows),
@@ -820,6 +928,101 @@ export async function uploadFileAndIngest({ userId, file, onProgress }) {
   });
 
   return result;
+}
+
+export async function ingestCsvTextAndSeedData({ userId, csvText, sourceName = 'seed_dataset.csv' }) {
+  if (!userId) {
+    throw new Error('Please sign in before importing data.');
+  }
+
+  const records = parseCsv(String(csvText || ''));
+  if (!records.length) {
+    throw new Error('No valid sales records found in dataset.');
+  }
+
+  const batch = writeBatch(db);
+  const salesCollection = collection(db, 'salesData');
+
+  records.forEach((record) => {
+    const docRef = doc(salesCollection);
+    batch.set(docRef, {
+      productName: record.productName,
+      sales: record.sales,
+      stock: record.stock,
+      date: Timestamp.fromDate(record.date),
+      userId,
+      createdAt: serverTimestamp()
+    });
+  });
+
+  await batch.commit();
+
+  await addDoc(collection(db, 'uploads'), {
+    userId,
+    fileName: sourceName,
+    fileType: 'text/csv',
+    fileSize: csvText.length,
+    filePath: 'public/evaluator_chart_metrics_data.csv',
+    downloadURL: '',
+    recordsCount: records.length,
+    status: 'success',
+    createdAt: serverTimestamp()
+  });
+
+  await refreshDerivedCollections(userId);
+
+  await logActivity({
+    userId,
+    action: 'seed_dataset_imported',
+    status: 'success',
+    message: 'Seed CSV dataset imported successfully.',
+    meta: {
+      sourceName,
+      recordsCount: records.length
+    }
+  });
+
+  return { recordsCount: records.length };
+}
+
+export async function removeUserDataset({ userId }) {
+  if (!userId) {
+    throw new Error('Please sign in before removing data.');
+  }
+
+  const collectionsToClear = ['salesData', 'uploads', 'alerts', 'forecasts', 'recommendations', 'activityLogs'];
+  const removed = {};
+  const failed = {};
+
+  for (const collectionName of collectionsToClear) {
+    try {
+      const snapshot = await getDocs(query(collection(db, collectionName), where('userId', '==', userId)));
+      removed[collectionName] = snapshot.size;
+
+      for (const docSnap of snapshot.docs) {
+        await deleteDoc(doc(db, collectionName, docSnap.id));
+      }
+    } catch (error) {
+      failed[collectionName] = error?.message || 'Deletion failed';
+      removed[collectionName] = removed[collectionName] || 0;
+    }
+  }
+
+  const hasFailures = Object.keys(failed).length > 0;
+
+  try {
+    await logActivity({
+      userId,
+      action: 'dataset_removed',
+      status: hasFailures ? 'partial' : 'success',
+      message: hasFailures ? 'User dataset removed with partial failures.' : 'User dataset removed from Firestore collections.',
+      meta: { removed, failed }
+    });
+  } catch {
+    // Do not block delete flow if activity logging fails.
+  }
+
+  return { removed, failed };
 }
 
 export async function saveManualRecord({ userId, record }) {

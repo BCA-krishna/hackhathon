@@ -9,6 +9,7 @@ const analyticsRoutes = require('./routes/analyticsRoutes');
 const forecastRoutes = require('./routes/forecastRoutes');
 const alertRoutes = require('./routes/alertRoutes');
 const recommendationRoutes = require('./routes/recommendationRoutes');
+const aiRoutes = require('./routes/aiRoutes');
 const { notFound, errorHandler } = require('./middlewares/errorMiddleware');
 const env = require('./config/env');
 
@@ -31,6 +32,7 @@ function createApp() {
   app.use('/api', forecastRoutes);
   app.use('/api', alertRoutes);
   app.use('/api', recommendationRoutes);
+  app.use('/api', aiRoutes);
 
   app.use(notFound);
   app.use(errorHandler);
