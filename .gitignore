@@ -11,7 +11,7 @@ coverage/
 
 # Env files
 .env
-.env.*
+.env.local
 backend/.env
 frontend/.env
 *firebase-adminsdk*.json
