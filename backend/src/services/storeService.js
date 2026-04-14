@@ -3,7 +3,8 @@ const env = require('../config/env');
 
 const COLLECTIONS = {
   users: 'users',
-  sales: 'sales',
+  sales: 'salesData',      // Frontend uploads to 'salesData'; keeping 'sales' as legacy fallback
+  salesLegacy: 'sales',
   inventory: 'inventory',
   alerts: 'alerts'
 };
@@ -174,9 +175,19 @@ async function listSalesByUser(userId) {
   }
 
   const db = getFirestore();
+
+  // Primary: 'salesData' — where the frontend upload service stores records
   const snapshot = await db.collection(COLLECTIONS.sales).where('userId', '==', String(userId)).get();
 
-  return snapshot.docs
+  if (!snapshot.empty) {
+    return snapshot.docs
+      .map(fromFirestoreDoc)
+      .sort((a, b) => new Date(a.date) - new Date(b.date));
+  }
+
+  // Fallback: legacy 'sales' collection
+  const legacySnapshot = await db.collection(COLLECTIONS.salesLegacy).where('userId', '==', String(userId)).get();
+  return legacySnapshot.docs
     .map(fromFirestoreDoc)
     .sort((a, b) => new Date(a.date) - new Date(b.date));
 }
@@ -309,9 +320,88 @@ function clearStoreForTests() {
 
   memoryStore.users = [];
   memoryStore.sales = [];
-  memoryStore.inventory = [];
+      memoryStore.inventory = [];
   memoryStore.alerts = [];
   memoryCounter = 1;
+}
+
+async function createSale(userId, record) {
+  if (usingMemory()) {
+    const sale = {
+      id: nextId('sale'),
+      userId: String(userId),
+      productName: record.productName,
+      sales: Number(record.sales || 0),
+      category: record.category || 'General',
+      quantity: Number(record.quantity || 1),
+      price: Number(record.price || 0),
+      cost: Number(record.cost || 0),
+      date: new Date(),
+      createdAt: nowIso(),
+      updatedAt: nowIso()
+    };
+    memoryStore.sales.push(sale);
+    return sale;
+  }
+
+  const db = getFirestore();
+  const docRef = db.collection(COLLECTIONS.sales).doc();
+  const saleData = {
+    userId: String(userId),
+    productName: record.productName,
+    sales: Number(record.sales || 0),
+    category: record.category || 'General',
+    quantity: Number(record.quantity || 1),
+    price: Number(record.price || 0),
+    cost: Number(record.cost || 0),
+    date: new Date(),
+    createdAt: new Date(),
+    updatedAt: new Date()
+  };
+  await docRef.set(saleData);
+  return { id: docRef.id, ...saleData };
+}
+
+async function getLatestProducts(userId) {
+  // If memory, return from memory store
+  if (usingMemory()) {
+    const products = {};
+    memoryStore.sales
+      .filter((s) => s.userId === String(userId))
+      .forEach((s) => {
+        if (!products[s.productName]) {
+          products[s.productName] = { 
+            productName: s.productName, 
+            category: s.category, 
+            price: s.price 
+          };
+        }
+      });
+    return Object.values(products);
+  }
+
+  // Otherwise from Firestore (limited to last 500 sales for performance/products discovery)
+  const db = getFirestore();
+  const snapshot = await db
+    .collection(COLLECTIONS.sales)
+    .where('userId', '==', String(userId))
+    .orderBy('date', 'desc')
+    .limit(500)
+    .get();
+
+  const products = {};
+  snapshot.forEach((doc) => {
+    const data = doc.data();
+    if (!products[data.productName]) {
+      products[data.productName] = {
+        productName: data.productName,
+        category: data.category || 'General',
+        price: data.price || 0
+      };
+    }
+  });
+
+  return Object.values(products);
 }
 
 module.exports = {
@@ -319,7 +409,9 @@ module.exports = {
   findUserByEmail,
   findUserById,
   createSalesBulk,
+  createSale,
   listSalesByUser,
+  getLatestProducts,
   upsertInventoryBulk,
   listInventoryByUser,
   replaceAlertsForUser,

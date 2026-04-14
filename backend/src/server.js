@@ -20,9 +20,9 @@ async function start() {
   setIo(io);
   registerSocketHandlers(io);
 
-  server.listen(env.port, () => {
+  server.listen(env.port, '0.0.0.0', () => {
     // eslint-disable-next-line no-console
-    console.log(`Backend running on port ${env.port}`);
+    console.log(`Backend running on port ${env.port} (0.0.0.0)`);
   });
 }
 
