@@ -56,6 +56,25 @@ export default function FeedbackInsightsPage() {
     ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
     : 'border-amber-500/40 bg-amber-500/10 text-amber-200';
 
+  const chatbotContext = useMemo(() => ({
+    product: {
+      name: 'Customer Feedback Engine',
+      category: 'SaaS analytics',
+      launchQuarter: 'Q2 2026',
+    },
+    salesData: {
+      trend: analysis?.summary?.sentiment?.negative?.includes('0%') ? 'up' : 'stable',
+      monthlyRevenue: '$42.5k',
+      conversionRate: '4.1%'
+    },
+    feedbackSummary: {
+      overallSentiment: analysis?.summary?.sentiment || {},
+      painPoints: analysis?.summary?.themes?.negative || [],
+      praisedFeatures: analysis?.summary?.themes?.positive || []
+    },
+    aiInsights: analysis?.aiInsights || {}
+  }), [analysis]);
+
   const handleAnalyze = async (inputOverride) => {
     setError('');
     setInfo('');

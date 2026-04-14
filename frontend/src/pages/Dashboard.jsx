@@ -3,6 +3,7 @@ import { Bar, BarChart, CartesianGrid, Line, LineChart, ReferenceLine, Responsiv
 import Spinner from '../components/Spinner';
 import ErrorBanner from '../components/ErrorBanner';
 import { useAuth } from '../context/AuthContext';
+import { useAnalytics } from '../context/AnalyticsContext';
 import {
   formatFirestoreError,
   subscribeToAlerts,
@@ -14,6 +15,7 @@ import {
 
 export default function DashboardPage() {
   const { user } = useAuth();
+  const { updateAnalytics } = useAnalytics();
 
   const [salesRows, setSalesRows] = useState([]);
   const [uploadRows, setUploadRows] = useState([]);
@@ -178,21 +180,25 @@ export default function DashboardPage() {
   }, [user?.uid]);
 
   const trendData = useMemo(() => {
-    if (!salesRows.length) return [];
     if (!analysisRows.length) return [];
-
     const grouped = analysisRows.reduce((acc, row) => {
-      const key = new Date(row.date).toISOString().slice(0, 10);
+      // Robust: always convert to ISO string for consistency
+      let dateObj = row.date instanceof Date ? row.date : new Date(row.date);
+      if (isNaN(dateObj.getTime())) return acc; // skip invalid dates
+      const key = dateObj.toISOString().slice(0, 10);
       acc[key] = (acc[key] || 0) + Number(row.sales || 0);
       return acc;
     }, {});
-
     const rows = Object.entries(grouped)
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([date, sales]) => ({ date, sales }));
-
+    // Debug: log the trend data
+    if (process.env.NODE_ENV !== 'production') {
+      // eslint-disable-next-line no-console
+      console.log('TrendData (filtered):', rows);
+    }
     return rows;
-  }, [salesRows, analysisRows]);
+  }, [analysisRows]);
 
   const productData = useMemo(() => {
     if (!salesRows.length) return [];
@@ -631,6 +637,26 @@ export default function DashboardPage() {
     };
   }, [trendData, uploadRows.length, forecastRows.length]);
 
+  useEffect(() => {
+    if (salesRows.length > 0) {
+      updateAnalytics({
+        totalRevenue: kpi.revenue,
+        records: kpi.totalSales,
+        topProducts: topSellingProducts,
+        lowProducts: lowSellingProducts,
+        lowStockItems: alerts.filter(a => a.type === 'LOW_STOCK').map(a => a.message),
+        alerts: normalizedAlerts,
+        weekComparison: {
+          currentWeek: windowRows.current.reduce((sum, item) => sum + Number(item.sales || 0), 0),
+          previousWeek: windowRows.previous.reduce((sum, item) => sum + Number(item.sales || 0), 0),
+          growth: (windowRows.previous.reduce((sum, item) => sum + Number(item.sales || 0), 0) > 0)
+            ? ((windowRows.current.reduce((sum, item) => sum + Number(item.sales || 0), 0) - windowRows.previous.reduce((sum, item) => sum + Number(item.sales || 0), 0)) / windowRows.previous.reduce((sum, item) => sum + Number(item.sales || 0), 0)) * 100
+            : 0
+        }
+      });
+    }
+  }, [kpi, topSellingProducts, lowSellingProducts, normalizedAlerts, windowRows, salesRows.length, updateAnalytics]);
+
   if (loading) return <Spinner label="Loading dashboard" />;
 
   return (
@@ -647,23 +673,43 @@ export default function DashboardPage() {
 
       <section className="rounded-2xl border border-slate-700 bg-slate-900/70 p-4">
         <div className="flex flex-wrap items-end gap-3">
-          <div>
-            <label className="mb-1 block text-xs text-slate-400">From</label>
-            <input
-              type="date"
-              value={dateFrom}
-              onChange={(event) => setDateFrom(event.target.value)}
-              className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm"
-            />
+          <div className="relative group">
+            <label className="mb-1 block text-xs font-medium text-slate-400 group-focus-within:text-cyan-400 transition-colors">From</label>
+            <div className="relative">
+              <input
+                type="date"
+                value={dateFrom}
+                onChange={(event) => setDateFrom(event.target.value)}
+                className="w-full rounded-xl border border-slate-600 bg-slate-900/80 px-4 py-2.5 pl-10 text-sm text-white focus:border-cyan-500/50 focus:outline-none focus:ring-4 focus:ring-cyan-500/10 transition-all"
+              />
+              <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none group-focus-within:text-cyan-400 transition-colors">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+                  <line x1="16" y1="2" x2="16" y2="6" />
+                  <line x1="8" y1="2" x2="8" y2="6" />
+                  <line x1="3" y1="10" x2="21" y2="10" />
+                </svg>
+              </div>
+            </div>
           </div>
-          <div>
-            <label className="mb-1 block text-xs text-slate-400">To</label>
-            <input
-              type="date"
-              value={dateTo}
-              onChange={(event) => setDateTo(event.target.value)}
-              className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm"
-            />
+          <div className="relative group">
+            <label className="mb-1 block text-xs font-medium text-slate-400 group-focus-within:text-cyan-400 transition-colors">To</label>
+            <div className="relative">
+              <input
+                type="date"
+                value={dateTo}
+                onChange={(event) => setDateTo(event.target.value)}
+                className="w-full rounded-xl border border-slate-600 bg-slate-900/80 px-4 py-2.5 pl-10 text-sm text-white focus:border-cyan-500/50 focus:outline-none focus:ring-4 focus:ring-cyan-500/10 transition-all"
+              />
+              <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none group-focus-within:text-cyan-400 transition-colors">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+                  <line x1="16" y1="2" x2="16" y2="6" />
+                  <line x1="8" y1="2" x2="8" y2="6" />
+                  <line x1="3" y1="10" x2="21" y2="10" />
+                </svg>
+              </div>
+            </div>
           </div>
           <button
             type="button"

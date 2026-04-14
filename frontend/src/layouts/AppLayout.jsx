@@ -1,5 +1,6 @@
 import { Link, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import Chatbot from '../components/Chatbot';
 
 const links = [
   { to: '/dashboard', label: 'Dashboard' },
@@ -73,6 +74,8 @@ export default function AppLayout() {
           </main>
         </div>
       </div>
+
+      <Chatbot />
     </div>
   );
 }

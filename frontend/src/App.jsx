@@ -2,6 +2,7 @@ import { Suspense, lazy } from 'react';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import AppLayout from './layouts/AppLayout';
 import { useAuth } from './context/AuthContext';
+import { AnalyticsProvider } from './context/AnalyticsContext';
 import Spinner from './components/Spinner';
 import PrivateRoute from './components/PrivateRoute';
 import AppVideoBackground from './components/AppVideoBackground';
@@ -39,44 +40,46 @@ export default function App() {
       {showVideoBackground ? <AppVideoBackground /> : null}
 
       <div className="relative z-10">
-        <Suspense
-          fallback={
-            <div className="flex min-h-screen items-center justify-center">
-              <Spinner label="Loading page" />
-            </div>
-          }
-        >
-          <Routes>
-            <Route path="/" element={<LandingPage />} />
+        <AnalyticsProvider>
+          <Suspense
+            fallback={
+              <div className="flex min-h-screen items-center justify-center">
+                <Spinner label="Loading page" />
+              </div>
+            }
+          >
+            <Routes>
+              <Route path="/" element={<LandingPage />} />
 
-            <Route
-              path="/login"
-              element={
-                <PublicRoute>
-                  <LoginPage />
-                </PublicRoute>
-              }
-            />
+              <Route
+                path="/login"
+                element={
+                  <PublicRoute>
+                    <LoginPage />
+                  </PublicRoute>
+                }
+              />
 
-            <Route
-              element={
-                <PrivateRoute>
-                  <AppLayout />
-                </PrivateRoute>
-              }
-            >
-              <Route path="/dashboard" element={<DashboardPage />} />
-              <Route path="/analytics" element={<AnalyticsPage />} />
-              <Route path="/feedback-insights" element={<FeedbackInsightsPage />} />
-              <Route path="/upload" element={<UploadDataPage />} />
-              <Route path="/forecast" element={<ForecastPage />} />
-              <Route path="/alerts" element={<AlertsPage />} />
-              <Route path="/settings" element={<SettingsPage />} />
-            </Route>
+              <Route
+                element={
+                  <PrivateRoute>
+                    <AppLayout />
+                  </PrivateRoute>
+                }
+              >
+                <Route path="/dashboard" element={<DashboardPage />} />
+                <Route path="/analytics" element={<AnalyticsPage />} />
+                <Route path="/feedback-insights" element={<FeedbackInsightsPage />} />
+                <Route path="/upload" element={<UploadDataPage />} />
+                <Route path="/forecast" element={<ForecastPage />} />
+                <Route path="/alerts" element={<AlertsPage />} />
+                <Route path="/settings" element={<SettingsPage />} />
+              </Route>
 
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </Suspense>
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </Suspense>
+        </AnalyticsProvider>
       </div>
     </div>
   );
